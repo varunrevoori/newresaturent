@@ -215,10 +215,21 @@ export async function fetchRestaurantBundle(id: string): Promise<RestaurantBundl
 }
 
 export async function approveRestaurant(id: string, isapproved: boolean) {
-  const { error } = await supabase.from('restaurants').update({ isapproved }).eq('id', id);
-  if (error) {
-    throw error;
+  const response = await fetch('/api/approve-restaurant', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ id, isapproved })
+  });
+
+  const payload = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
+
+  if (!response.ok) {
+    throw new Error(payload?.error ?? 'Failed to approve restaurant');
   }
+
+  return payload;
 }
 
 export async function updateRestaurant(id: string, changes: RestaurantUpdateInput) {

@@ -48,6 +48,20 @@ function booleanValue(formData: FormData, name: string) {
   return formData.get(name) === 'on';
 }
 
+function requiredNumber(formData: FormData, name: string) {
+  const rawValue = formValue(formData.get(name)).trim();
+  if (!rawValue) {
+    throw new Error(`${name} is required`);
+  }
+
+  const parsed = Number(rawValue);
+  if (Number.isNaN(parsed)) {
+    throw new Error(`${name} must be a valid number`);
+  }
+
+  return parsed;
+}
+
 function buildRestaurantUpdate(formData: FormData) {
   return {
     name: formValue(formData.get('name')).trim(),
@@ -64,9 +78,9 @@ function buildRestaurantUpdate(formData: FormData) {
     is_active: booleanValue(formData, 'is_active'),
     is_pure_veg: booleanValue(formData, 'is_pure_veg'),
     booking_enabled: booleanValue(formData, 'booking_enabled'),
-    avg_duration_minutes: nullableNumber(formData.get('avg_duration_minutes')),
+    avg_duration_minutes: requiredNumber(formData, 'avg_duration_minutes'),
     max_bookings_per_slot: nullableNumber(formData.get('max_bookings_per_slot')),
-    advance_booking_days: nullableNumber(formData.get('advance_booking_days')),
+    advance_booking_days: requiredNumber(formData, 'advance_booking_days'),
     modification_available: booleanValue(formData, 'modification_available'),
     modification_cutoff_minutes: nullableNumber(formData.get('modification_cutoff_minutes')),
     cancellation_available: booleanValue(formData, 'cancellation_available'),
@@ -105,7 +119,7 @@ function buildMediaAssetPayload(formData: FormData) {
     asset_type: formValue(formData.get('asset_type')) as 'food' | 'ambience' | 'menu',
     file_url: formValue(formData.get('file_url')).trim(),
     file_path: nullableString(formData.get('file_path')),
-    sort_order: nullableNumber(formData.get('sort_order')),
+    sort_order: requiredNumber(formData, 'sort_order'),
     is_active: booleanValue(formData, 'is_active'),
     google_photo_reference: nullableString(formData.get('google_photo_reference')),
     local_file_path: nullableString(formData.get('local_file_path')),
@@ -118,7 +132,7 @@ function buildMediaAssetPayload(formData: FormData) {
 
 function buildReviewPayload(formData: FormData) {
   return {
-    rating: nullableNumber(formData.get('rating')),
+    rating: requiredNumber(formData, 'rating'),
     review_text: nullableString(formData.get('review_text')),
     is_approved: booleanValue(formData, 'is_approved'),
     food_rating: nullableNumber(formData.get('food_rating')),
@@ -143,6 +157,7 @@ export default function RestaurantDetailsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const [savingAction, setSavingAction] = useState<string | null>(null);
+  const [enhancementStatus, setEnhancementStatus] = useState<Record<string, string>>({});
 
   async function loadBundle() {
     if (!restaurantId) {
@@ -181,9 +196,9 @@ export default function RestaurantDetailsPage() {
     setNotice(null);
 
     try {
-      await approveRestaurant(restaurantId, isapproved);
+      const result = await approveRestaurant(restaurantId, isapproved);
       await loadBundle();
-      setNotice(isapproved ? 'Restaurant approved.' : 'Restaurant marked as pending again.');
+      setNotice(result?.message ?? (isapproved ? 'Restaurant approved.' : 'Restaurant marked as pending again.'));
     } catch (approveError) {
       setError(approveError instanceof Error ? approveError.message : 'Failed to update approval state');
     } finally {
@@ -329,6 +344,33 @@ export default function RestaurantDetailsPage() {
       setError(saveError instanceof Error ? saveError.message : 'Failed to save review');
     } finally {
       setSavingAction(null);
+    }
+  }
+
+  async function handleEnhanceImage(assetId: string, imageUrl: string | null | undefined) {
+    if (!imageUrl) {
+      setNotice('No image URL available to enhance.');
+      return;
+    }
+
+    setEnhancementStatus((s) => ({ ...s, [assetId]: 'queuing' }));
+    setNotice(null);
+
+    try {
+      const res = await fetch('/api/enhance-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assetId, url: imageUrl, restaurantId })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to queue enhancement');
+
+      setEnhancementStatus((s) => ({ ...s, [assetId]: data.status || 'queued' }));
+      setNotice('Image enhancement queued.');
+    } catch (e) {
+      setEnhancementStatus((s) => ({ ...s, [assetId]: 'error' }));
+      setError(e instanceof Error ? e.message : 'Failed to queue enhancement');
     }
   }
 
@@ -709,6 +751,20 @@ export default function RestaurantDetailsPage() {
                     <div className="toolbar">
                       <div className="helper">Created {asset.created_at}</div>
                       <div className="search-row">
+                        <button
+                          className="button"
+                          type="button"
+                          onClick={() => void handleEnhanceImage(asset.id, asset.storage_public_url || asset.file_url)}
+                          disabled={enhancementStatus[asset.id] === 'queuing' || enhancementStatus[asset.id] === 'enhancing'}
+                        >
+                          {enhancementStatus[asset.id] === 'queuing'
+                            ? 'Queuing...'
+                            : enhancementStatus[asset.id] === 'queued'
+                            ? 'Queued'
+                            : enhancementStatus[asset.id] === 'error'
+                            ? 'Retry'
+                            : 'Enhance'}
+                        </button>
                         <button className="button-ghost" type="button" onClick={() => void handleMediaAssetDelete(asset.id)}>
                           Delete
                         </button>
