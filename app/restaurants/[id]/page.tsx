@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import type { FormEvent } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import {
   approveRestaurant,
@@ -17,12 +17,31 @@ import {
   nullableString,
   parseJsonText,
   RestaurantBundle,
-  saveMediaAsset,
   saveOpeningHour,
   saveReview,
   textFromArray,
   updateRestaurant
 } from '@/lib/dashboard';
+import { supabase } from '@/lib/supabase';
+
+type AssetType = 'food' | 'ambience' | 'menu';
+
+type LocalMediaPreview = {
+  id: string;
+  assetType: AssetType;
+  previewUrl: string;
+  fileName: string;
+  file: File;
+};
+
+function sanitizeFileName(fileName: string) {
+  return fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+function isBucketNotFoundError(message: string) {
+  const normalized = message.toLowerCase();
+  return normalized.includes('bucket not found') || normalized.includes('not found');
+}
 
 function formValue(value: unknown) {
   return value === null || value === undefined ? '' : String(value);
@@ -114,22 +133,6 @@ function buildOpeningHourPayload(formData: FormData) {
   };
 }
 
-function buildMediaAssetPayload(formData: FormData) {
-  return {
-    asset_type: formValue(formData.get('asset_type')) as 'food' | 'ambience' | 'menu',
-    file_url: formValue(formData.get('file_url')).trim(),
-    file_path: nullableString(formData.get('file_path')),
-    sort_order: requiredNumber(formData, 'sort_order'),
-    is_active: booleanValue(formData, 'is_active'),
-    google_photo_reference: nullableString(formData.get('google_photo_reference')),
-    local_file_path: nullableString(formData.get('local_file_path')),
-    mime_type: nullableString(formData.get('mime_type')),
-    storage_bucket: nullableString(formData.get('storage_bucket')),
-    storage_path: nullableString(formData.get('storage_path')),
-    storage_public_url: nullableString(formData.get('storage_public_url'))
-  };
-}
-
 function buildReviewPayload(formData: FormData) {
   return {
     rating: requiredNumber(formData, 'rating'),
@@ -158,6 +161,18 @@ export default function RestaurantDetailsPage() {
   const [version, setVersion] = useState(0);
   const [savingAction, setSavingAction] = useState<string | null>(null);
   const [enhancementStatus, setEnhancementStatus] = useState<Record<string, string>>({});
+  const [localMediaPreviews, setLocalMediaPreviews] = useState<LocalMediaPreview[]>([]);
+  const localPreviewUrlsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    localPreviewUrlsRef.current = localMediaPreviews.map((item) => item.previewUrl);
+  }, [localMediaPreviews]);
+
+  useEffect(() => {
+    return () => {
+      localPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, []);
 
   async function loadBundle() {
     if (!restaurantId) {
@@ -279,39 +294,6 @@ export default function RestaurantDetailsPage() {
     }
   }
 
-  async function handleMediaAssetSave(event: FormEvent<HTMLFormElement>, id: string) {
-    event.preventDefault();
-    setSavingAction(`media-${id}`);
-    setNotice(null);
-
-    try {
-      await saveMediaAsset(id, buildMediaAssetPayload(new FormData(event.currentTarget)));
-      await loadBundle();
-      setNotice('Media asset updated.');
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Failed to save media asset');
-    } finally {
-      setSavingAction(null);
-    }
-  }
-
-  async function handleMediaAssetAdd(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSavingAction('media-new');
-    setNotice(null);
-
-    try {
-      await createMediaAsset(restaurantId, buildMediaAssetPayload(new FormData(event.currentTarget)));
-      event.currentTarget.reset();
-      await loadBundle();
-      setNotice('New media asset added.');
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Failed to add media asset');
-    } finally {
-      setSavingAction(null);
-    }
-  }
-
   async function handleMediaAssetDelete(id: string) {
     if (!window.confirm('Delete this media asset?')) {
       return;
@@ -371,6 +353,144 @@ export default function RestaurantDetailsPage() {
     } catch (e) {
       setEnhancementStatus((s) => ({ ...s, [assetId]: 'error' }));
       setError(e instanceof Error ? e.message : 'Failed to queue enhancement');
+    }
+  }
+
+  function mediaUrl(asset: { storage_public_url: string | null; file_url: string }) {
+    return asset.storage_public_url || asset.file_url;
+  }
+
+  function handleLocalMediaFiles(assetType: AssetType, files: FileList | null) {
+    if (!files || files.length === 0) {
+      return;
+    }
+
+    const nextPreviews: LocalMediaPreview[] = [];
+    Array.from(files).forEach((file) => {
+      if (!file.type.startsWith('image/')) {
+        return;
+      }
+
+      nextPreviews.push({
+        id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        assetType,
+        previewUrl: URL.createObjectURL(file),
+        fileName: file.name,
+        file
+      });
+    });
+
+    if (nextPreviews.length > 0) {
+      setLocalMediaPreviews((current) => [...current, ...nextPreviews]);
+      setNotice('Local image preview updated.');
+    }
+  }
+
+  function handleRemoveLocalPreview(id: string) {
+    setLocalMediaPreviews((current) => {
+      const item = current.find((entry) => entry.id === id);
+      if (item) {
+        URL.revokeObjectURL(item.previewUrl);
+      }
+
+      return current.filter((entry) => entry.id !== id);
+    });
+  }
+
+  async function handleSaveLocalMediaChanges() {
+    if (localMediaPreviews.length === 0) {
+      setNotice('No local images to save.');
+      return;
+    }
+
+    setSavingAction('media-save');
+    setNotice(null);
+    setError(null);
+
+    try {
+      const baseSort = (bundle?.mediaAssets.length ?? 0) + 1;
+      const existingBuckets = Array.from(
+        new Set((bundle?.mediaAssets ?? []).map((asset) => asset.storage_bucket).filter(Boolean))
+      ) as string[];
+      const candidateBuckets = Array.from(
+        new Set([
+          ...existingBuckets,
+          process.env.NEXT_PUBLIC_SUPABASE_MEDIA_BUCKET,
+          'restaurant-media',
+          'restaurant_media',
+          'media-assets',
+          'media',
+          'uploads'
+        ].filter(Boolean))
+      ) as string[];
+
+      if (candidateBuckets.length === 0) {
+        throw new Error('No storage bucket configured. Set NEXT_PUBLIC_SUPABASE_MEDIA_BUCKET in .env.');
+      }
+
+      let resolvedBucket: string | null = null;
+
+      for (let index = 0; index < localMediaPreviews.length; index += 1) {
+        const preview = localMediaPreviews[index];
+        let uploadBucket: string | null = resolvedBucket;
+        let storagePath = '';
+        let uploadErrorMessage = '';
+
+        const tryBuckets: string[] = uploadBucket ? [uploadBucket] : candidateBuckets;
+
+        for (const bucket of tryBuckets) {
+          storagePath = `${restaurantId}/${preview.assetType}/${Date.now()}-${index}-${sanitizeFileName(preview.fileName)}`;
+          const { error: uploadError } = await supabase.storage.from(bucket).upload(storagePath, preview.file, {
+            upsert: false,
+            contentType: preview.file.type || undefined
+          });
+
+          if (!uploadError) {
+            uploadBucket = bucket;
+            resolvedBucket = bucket;
+            uploadErrorMessage = '';
+            break;
+          }
+
+          uploadErrorMessage = uploadError.message;
+          if (!isBucketNotFoundError(uploadError.message)) {
+            break;
+          }
+        }
+
+        if (!uploadBucket || uploadErrorMessage) {
+          throw new Error(`Upload failed for ${preview.fileName}: ${uploadErrorMessage || 'unknown upload error'}`);
+        }
+
+        const { data: publicData } = supabase.storage.from(uploadBucket).getPublicUrl(storagePath);
+        const publicUrl = publicData.publicUrl;
+
+        await createMediaAsset(restaurantId, {
+          asset_type: preview.assetType,
+          file_url: publicUrl,
+          sort_order: baseSort + index,
+          is_active: true,
+          local_file_path: preview.fileName,
+          mime_type: preview.file.type || null,
+          storage_bucket: uploadBucket,
+          storage_path: storagePath,
+          storage_public_url: publicUrl
+        });
+
+        URL.revokeObjectURL(preview.previewUrl);
+      }
+
+      setLocalMediaPreviews([]);
+      await loadBundle();
+      setNotice(`Image changes saved.${resolvedBucket ? ` Uploaded to bucket: ${resolvedBucket}.` : ''}`);
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : 'Failed to save images. Check storage bucket and insert permissions.'
+      );
+    } finally {
+      setSavingAction(null);
     }
   }
 
@@ -679,132 +799,99 @@ export default function RestaurantDetailsPage() {
                 <div>
                   <span className="kicker">Media assets</span>
                   <h2>Images and menus</h2>
-                  <p>These rows update restaurant_media_assets.</p>
+                  <p>Upload local images to preview instantly. Keep only preview, enhance, and remove actions.</p>
+                </div>
+                <div className="search-row">
+                  <span className="count-pill">{localMediaPreviews.length} local pending</span>
+                  <button className="button" type="button" onClick={() => void handleSaveLocalMediaChanges()} disabled={savingAction === 'media-save'}>
+                    {savingAction === 'media-save' ? 'Saving images...' : 'Save image changes'}
+                  </button>
                 </div>
               </div>
 
               <div className="table-like">
-                {(bundle?.mediaAssets ?? []).map((asset) => (
-                  <form key={`${version}-${asset.id}`} className="card" onSubmit={(event) => void handleMediaAssetSave(event, asset.id)}>
-                    <div className="form-grid">
-                      <div className="field">
-                        <label htmlFor={`asset-type-${asset.id}`}>Asset type</label>
-                        <select id={`asset-type-${asset.id}`} name="asset_type" defaultValue={asset.asset_type}>
-                          <option value="food">Food</option>
-                          <option value="ambience">Ambience</option>
-                          <option value="menu">Menu</option>
-                        </select>
-                      </div>
-                      <div className="field">
-                        <label htmlFor={`asset-url-${asset.id}`}>File URL</label>
-                        <input id={`asset-url-${asset.id}`} name="file_url" type="url" defaultValue={asset.file_url} required />
-                      </div>
-                      <div className="field">
-                        <label htmlFor={`asset-path-${asset.id}`}>File path</label>
-                        <input id={`asset-path-${asset.id}`} name="file_path" type="text" defaultValue={formValue(asset.file_path)} />
-                      </div>
-                      <div className="field">
-                        <label htmlFor={`asset-order-${asset.id}`}>Sort order</label>
-                        <input id={`asset-order-${asset.id}`} name="sort_order" type="number" step="1" defaultValue={formValue(asset.sort_order)} />
-                      </div>
-                      <div className="field">
-                        <label htmlFor={`asset-gphoto-${asset.id}`}>Google photo reference</label>
-                        <input id={`asset-gphoto-${asset.id}`} name="google_photo_reference" type="text" defaultValue={formValue(asset.google_photo_reference)} />
-                      </div>
-                      <div className="field">
-                        <label htmlFor={`asset-local-${asset.id}`}>Local file path</label>
-                        <input id={`asset-local-${asset.id}`} name="local_file_path" type="text" defaultValue={formValue(asset.local_file_path)} />
-                      </div>
-                      <div className="field">
-                        <label htmlFor={`asset-mime-${asset.id}`}>Mime type</label>
-                        <input id={`asset-mime-${asset.id}`} name="mime_type" type="text" defaultValue={formValue(asset.mime_type)} />
-                      </div>
-                      <div className="field">
-                        <label htmlFor={`asset-bucket-${asset.id}`}>Storage bucket</label>
-                        <input id={`asset-bucket-${asset.id}`} name="storage_bucket" type="text" defaultValue={formValue(asset.storage_bucket)} />
-                      </div>
-                      <div className="field">
-                        <label htmlFor={`asset-path-storage-${asset.id}`}>Storage path</label>
-                        <input id={`asset-path-storage-${asset.id}`} name="storage_path" type="text" defaultValue={formValue(asset.storage_path)} />
-                      </div>
-                      <div className="field">
-                        <label htmlFor={`asset-public-${asset.id}`}>Storage public URL</label>
-                        <input id={`asset-public-${asset.id}`} name="storage_public_url" type="url" defaultValue={formValue(asset.storage_public_url)} />
-                      </div>
-                    </div>
+                {[
+                  { key: 'food' as const, label: 'Food Images' },
+                  { key: 'ambience' as const, label: 'Ambience Images' },
+                  { key: 'menu' as const, label: 'Menu Images' }
+                ].map((group) => {
+                  const existingAssets = (bundle?.mediaAssets ?? []).filter((asset) => asset.asset_type === group.key);
+                  const localAssets = localMediaPreviews.filter((asset) => asset.assetType === group.key);
 
-                    <div className="switch-row">
-                      <label className="check"><input name="is_active" type="checkbox" defaultChecked={asset.is_active} /> Active</label>
-                    </div>
+                  return (
+                    <section key={group.key} className="helper-box media-group">
+                      <h3>{group.label}</h3>
 
-                    {asset.storage_public_url || asset.file_url ? (
-                      <div className="helper-box" style={{ marginTop: 12 }}>
-                        <div className="small">Preview</div>
-                        <img
-                          src={asset.storage_public_url || asset.file_url}
-                          alt="Restaurant media preview"
-                          style={{ width: '100%', maxWidth: 360, borderRadius: 16, marginTop: 10 }}
+                      <div className="media-preview-grid">
+                        {existingAssets.map((asset) => (
+                          <article key={asset.id} className="media-preview-card">
+                            <button
+                              className="media-remove"
+                              type="button"
+                              onClick={() => void handleMediaAssetDelete(asset.id)}
+                              aria-label="Remove image"
+                            >
+                              ×
+                            </button>
+                            <img src={mediaUrl(asset)} alt={`${group.label} preview`} className="media-preview-image" />
+                            <div className="search-row media-actions">
+                              <button
+                                className="button"
+                                type="button"
+                                onClick={() => void handleEnhanceImage(asset.id, mediaUrl(asset))}
+                                disabled={enhancementStatus[asset.id] === 'queuing' || enhancementStatus[asset.id] === 'enhancing'}
+                              >
+                                {enhancementStatus[asset.id] === 'queuing'
+                                  ? 'Queuing...'
+                                  : enhancementStatus[asset.id] === 'queued'
+                                  ? 'Queued'
+                                  : enhancementStatus[asset.id] === 'error'
+                                  ? 'Retry'
+                                  : 'Enhance'}
+                              </button>
+                            </div>
+                          </article>
+                        ))}
+
+                        {localAssets.map((asset) => (
+                          <article key={asset.id} className="media-preview-card">
+                            <button
+                              className="media-remove"
+                              type="button"
+                              onClick={() => handleRemoveLocalPreview(asset.id)}
+                              aria-label="Remove local preview"
+                            >
+                              ×
+                            </button>
+                            <img src={asset.previewUrl} alt={`${group.label} local preview`} className="media-preview-image" />
+                            <div className="search-row media-actions">
+                              <button
+                                className="button"
+                                type="button"
+                                onClick={() => setNotice('Save image changes first, then use Enhance.')}
+                              >
+                                Enhance
+                              </button>
+                            </div>
+                            <div className="small">Local: {asset.fileName}</div>
+                          </article>
+                        ))}
+                      </div>
+
+                      <div className="field">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={(event) => {
+                            handleLocalMediaFiles(group.key, event.target.files);
+                            event.currentTarget.value = '';
+                          }}
                         />
                       </div>
-                    ) : null}
-
-                    <div className="toolbar">
-                      <div className="helper">Created {asset.created_at}</div>
-                      <div className="search-row">
-                        <button
-                          className="button"
-                          type="button"
-                          onClick={() => void handleEnhanceImage(asset.id, asset.storage_public_url || asset.file_url)}
-                          disabled={enhancementStatus[asset.id] === 'queuing' || enhancementStatus[asset.id] === 'enhancing'}
-                        >
-                          {enhancementStatus[asset.id] === 'queuing'
-                            ? 'Queuing...'
-                            : enhancementStatus[asset.id] === 'queued'
-                            ? 'Queued'
-                            : enhancementStatus[asset.id] === 'error'
-                            ? 'Retry'
-                            : 'Enhance'}
-                        </button>
-                        <button className="button-ghost" type="button" onClick={() => void handleMediaAssetDelete(asset.id)}>
-                          Delete
-                        </button>
-                        <button className="button" type="submit" disabled={savingAction === `media-${asset.id}`}>
-                          {savingAction === `media-${asset.id}` ? 'Saving...' : 'Save asset'}
-                        </button>
-                      </div>
-                    </div>
-                  </form>
-                ))}
-
-                <form className="card" onSubmit={handleMediaAssetAdd}>
-                  <div className="form-grid">
-                    <div className="field">
-                      <label htmlFor="new-asset-type">Asset type</label>
-                      <select id="new-asset-type" name="asset_type" defaultValue="food">
-                        <option value="food">Food</option>
-                        <option value="ambience">Ambience</option>
-                        <option value="menu">Menu</option>
-                      </select>
-                    </div>
-                    <div className="field">
-                      <label htmlFor="new-asset-url">File URL</label>
-                      <input id="new-asset-url" name="file_url" type="url" required />
-                    </div>
-                    <div className="field">
-                      <label htmlFor="new-asset-order">Sort order</label>
-                      <input id="new-asset-order" name="sort_order" type="number" step="1" defaultValue={100} />
-                    </div>
-                  </div>
-                  <div className="switch-row">
-                    <label className="check"><input name="is_active" type="checkbox" defaultChecked /> Active</label>
-                  </div>
-                  <div className="toolbar">
-                    <div className="helper">Add a new media row to restaurant_media_assets.</div>
-                    <button className="button" type="submit" disabled={savingAction === 'media-new'}>
-                      {savingAction === 'media-new' ? 'Adding...' : 'Add media asset'}
-                    </button>
-                  </div>
-                </form>
+                    </section>
+                  );
+                })}
               </div>
             </section>
 
