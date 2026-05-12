@@ -44,6 +44,7 @@ export type Restaurant = {
   place_types: string[] | null;
   country: string | null;
   isapproved: boolean | null;
+  ai_summary: string | null;
 };
 
 export type OpeningHour = {
@@ -149,6 +150,7 @@ export type RestaurantUpdateInput = Partial<
     | 'place_types'
     | 'country'
     | 'isapproved'
+    | 'ai_summary'
   >
 >;
 
@@ -161,7 +163,7 @@ export type ReviewInput = Partial<Pick<Review, 'rating' | 'review_text' | 'is_ap
 
 const restaurantSelect = `
   id, name, phone, area, city, full_address, slug, cover_image, latitude, longitude,
-  description, cost_for_two, is_active, owner_user_id, is_pure_veg, booking_enabled,
+  description, ai_summary, cost_for_two, is_active, owner_user_id, is_pure_veg, booking_enabled,
   avg_duration_minutes, max_bookings_per_slot, advance_booking_days, modification_available,
   modification_cutoff_minutes, cancellation_available, cancellation_cutoff_minutes,
   cover_charge_enabled, cover_charge_amount, created_at, updated_at, is_advertised,

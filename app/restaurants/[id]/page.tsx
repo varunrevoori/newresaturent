@@ -120,7 +120,8 @@ function buildRestaurantUpdate(formData: FormData) {
     user_ratings_total: nullableNumber(formData.get('user_ratings_total')),
     place_types: arrayFromText(formValue(formData.get('place_types'))),
     country: nullableString(formData.get('country')),
-    isapproved: booleanValue(formData, 'isapproved')
+    isapproved: booleanValue(formData, 'isapproved'),
+    ai_summary: nullableString(formData.get('ai_summary'))
   };
 }
 
@@ -667,6 +668,11 @@ export default function RestaurantDetailsPage() {
                 <div className="field">
                   <label htmlFor="description">Description</label>
                   <textarea id="description" name="description" defaultValue={formValue(restaurant.description)} />
+                </div>
+
+                <div className="field">
+                  <label htmlFor="ai_summary">AI Summary</label>
+                  <textarea id="ai_summary" name="ai_summary" defaultValue={formValue(restaurant.ai_summary)} />
                 </div>
 
                 <div className="field">
