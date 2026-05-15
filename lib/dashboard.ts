@@ -195,6 +195,32 @@ export async function fetchRestaurants(includeApproved = false) {
   return (data ?? []) as Restaurant[];
 }
 
+export async function fetchApprovedCount() {
+  const { count, error } = await supabase
+    .from('restaurants')
+    .select('*', { count: 'exact', head: true })
+    .eq('isapproved', true);
+
+  if (error) {
+    throw error;
+  }
+
+  return count ?? 0;
+}
+
+export async function fetchPendingCount() {
+  const { count, error } = await supabase
+    .from('restaurants')
+    .select('*', { count: 'exact', head: true })
+    .or('isapproved.is.null,isapproved.eq.false');
+
+  if (error) {
+    throw error;
+  }
+
+  return count ?? 0;
+}
+
 export async function fetchRestaurantBundle(id: string): Promise<RestaurantBundle> {
   const [restaurantResult, hoursResult, mediaResult, reviewsResult] = await Promise.all([
     supabase.from('restaurants').select(restaurantSelect).eq('id', id).single(),

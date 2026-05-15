@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { approveRestaurant, fetchRestaurants, Restaurant } from '@/lib/dashboard';
+import { approveRestaurant, fetchRestaurants, fetchApprovedCount, fetchPendingCount, Restaurant } from '@/lib/dashboard';
 
 function restaurantLocation(restaurant: Restaurant) {
   return [restaurant.area, restaurant.city, restaurant.country].filter(Boolean).join(' · ');
@@ -17,6 +17,8 @@ export default function HomePage() {
   const [showApproved, setShowApproved] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [reloadCount, setReloadCount] = useState(0);
+  const [approvedCountGlobal, setApprovedCountGlobal] = useState(0);
+  const [pendingCountGlobal, setPendingCountGlobal] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -26,9 +28,15 @@ export default function HomePage() {
       setError(null);
 
       try {
-        const data = await fetchRestaurants(showApproved);
+        const [data, approvedCount, pendingCount] = await Promise.all([
+          fetchRestaurants(showApproved),
+          fetchApprovedCount(),
+          fetchPendingCount()
+        ]);
         if (active) {
           setRestaurants(data);
+          setApprovedCountGlobal(approvedCount);
+          setPendingCountGlobal(pendingCount);
         }
       } catch (loadError) {
         if (active) {
@@ -63,8 +71,8 @@ export default function HomePage() {
     });
   }, [restaurants, search]);
 
-  const pendingCount = restaurants.filter((restaurant) => restaurant.isapproved !== true).length;
-  const approvedCount = restaurants.filter((restaurant) => restaurant.isapproved === true).length;
+  const approvedCount = approvedCountGlobal;
+  const pendingCount = pendingCountGlobal;
 
   async function handleApprove(restaurantId: string) {
     setSavingId(restaurantId);

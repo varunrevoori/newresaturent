@@ -42,7 +42,8 @@ async function syncSecondDatabase(restaurantId: string) {
     cover_image: source.restaurant.cover_image,
     latitude: source.restaurant.latitude,
     longitude: source.restaurant.longitude,
-    description: source.restaurant.description,
+    // Prefer AI-generated summary as the external description when available
+    description: source.restaurant.ai_summary ,
     cost_for_two: source.restaurant.cost_for_two,
     is_active: source.restaurant.is_active,
     owner_user_id: null,
