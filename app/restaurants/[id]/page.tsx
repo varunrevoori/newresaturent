@@ -17,6 +17,8 @@ import {
   nullableNumber,
   nullableString,
   parseJsonText,
+  RestaurantTag,
+  RestaurantTagType,
   RestaurantBundle,
   saveOpeningHour,
   saveReview,
@@ -158,6 +160,122 @@ function buildReviewPayload(formData: FormData) {
   };
 }
 
+const facilityTagOptions = [
+  'Air Conditioning',
+  'Parking',
+  'Outdoor Seating',
+  'Family Friendly',
+  'Pet Friendly',
+  'WiFi',
+  'Valet Parking',
+  'Live Music',
+  'Wheelchair Accessible',
+  'Bar Available'
+];
+
+const moodTagOptions = [
+  'Asian',
+  'Biryani',
+  'Breakfast',
+  'Buffet',
+  'Cozy cafe',
+  'Desserts',
+  'Drink & dine',
+  'Family dining',
+  'Party Vibes',
+  'Romantic dining'
+];
+
+function tagTextFromBundle(tags: RestaurantTag[] | undefined, tagType: RestaurantTagType) {
+  return (tags ?? [])
+    .filter((tag) => tag.tag_type === tagType)
+    .sort((left, right) => left.sort_order - right.sort_order)
+    .map((tag) => tag.tag_value)
+    .join('\n');
+}
+
+function tagLinesFromText(value: string) {
+  return value
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function buildRestaurantTagPayload(formData: FormData) {
+  const cuisines = tagLinesFromText(formValue(formData.get('cuisines')));
+  const moods = formData.getAll('mood_tag').map((value) => String(value).trim()).filter(Boolean);
+  const highlights = tagLinesFromText(formValue(formData.get('highlights')));
+  const worthVisit = tagLinesFromText(formValue(formData.get('worth_visit')));
+  const facilities = formData.getAll('facility').map((value) => String(value).trim()).filter(Boolean);
+
+  return [
+    ...cuisines.map((tag_value, index) => ({ tag_type: 'cuisine' as const, tag_value, sort_order: index })),
+    ...moods.map((tag_value, index) => ({ tag_type: 'mood' as const, tag_value, sort_order: index })),
+    ...facilities.map((tag_value, index) => ({ tag_type: 'facility' as const, tag_value, sort_order: index })),
+    ...highlights.map((tag_value, index) => ({ tag_type: 'highlight' as const, tag_value, sort_order: index })),
+    ...worthVisit.map((tag_value, index) => ({ tag_type: 'worth_visit' as const, tag_value, sort_order: index }))
+  ];
+}
+
+async function saveRestaurantTagsForForm(
+  restaurantId: string,
+  tags: Array<{
+    tag_type: RestaurantTagType;
+    tag_value: string;
+    sort_order: number;
+  }>
+) {
+  function isPermissionError(error: unknown) {
+    const err = error as { status?: number | string; code?: string; message?: string } | null;
+    const status = typeof err?.status === 'string' ? Number(err.status) : err?.status;
+    const message = (err?.message ?? '').toLowerCase();
+
+    return (
+      status === 401 ||
+      status === 403 ||
+      err?.code === '401' ||
+      err?.code === '403' ||
+      err?.code === '42501' ||
+      message.includes('unauthorized') ||
+      message.includes('row-level security') ||
+      message.includes('permission denied')
+    );
+  }
+
+  const deleteResult = await supabase.from('restaurant_tags').delete().eq('restaurant_id', restaurantId);
+  if (deleteResult.error) {
+    if (isPermissionError(deleteResult.error)) {
+      return { warning: 'Restaurant saved, but mood tags could not be updated due to table permissions.' };
+    }
+
+    throw deleteResult.error;
+  }
+
+  const normalized = tags
+    .map((tag) => ({
+      restaurant_id: restaurantId,
+      tag_type: tag.tag_type,
+      tag_value: tag.tag_value.trim(),
+      sort_order: tag.sort_order
+    }))
+    .filter((tag) => tag.tag_value.length > 0);
+
+  if (!normalized.length) {
+    return {};
+  }
+
+  const insertResult = await supabase.from('restaurant_tags').insert(normalized);
+  if (insertResult.error) {
+    if (isPermissionError(insertResult.error)) {
+      return { warning: 'Restaurant saved, but mood tags could not be updated due to table permissions.' };
+    }
+
+    throw insertResult.error;
+  }
+
+  return {};
+}
+
 export default function RestaurantDetailsPage() {
   const params = useParams<{ id: string }>();
   const restaurantId = params.id;
@@ -232,18 +350,25 @@ export default function RestaurantDetailsPage() {
     event.preventDefault();
     setSavingAction('restaurant');
     setNotice(null);
+    const formElement = event.currentTarget;
 
     try {
-      const payload = buildRestaurantUpdate(new FormData(event.currentTarget));
+      const formData = new FormData(formElement);
+      const payload = buildRestaurantUpdate(formData);
       if (!payload.name) {
         throw new Error('Restaurant name is required');
       }
 
       await updateRestaurant(restaurantId, payload);
+      const tagSaveResult = await saveRestaurantTagsForForm(restaurantId, buildRestaurantTagPayload(formData));
       await loadBundle();
-      setNotice('Restaurant details saved.');
+      setNotice(tagSaveResult.warning ?? 'Restaurant details saved.');
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Failed to save restaurant');
+      if (saveError && typeof saveError === 'object' && 'message' in saveError) {
+        setError(String((saveError as { message?: string }).message ?? 'Failed to save restaurant'));
+      } else {
+        setError(saveError instanceof Error ? saveError.message : 'Failed to save restaurant');
+      }
     } finally {
       setSavingAction(null);
     }
@@ -728,6 +853,84 @@ export default function RestaurantDetailsPage() {
                 <div className="field">
                   <label htmlFor="booking_terms">Booking terms</label>
                   <textarea id="booking_terms" name="booking_terms" defaultValue={textFromArray(restaurant.booking_terms)} />
+                </div>
+
+                <div className="field">
+                  <label htmlFor="cuisines">Cuisines</label>
+                  <textarea
+                    id="cuisines"
+                    name="cuisines"
+                    defaultValue={tagTextFromBundle(bundle?.tags, 'cuisine')}
+                    placeholder="Seafood, Grill, International"
+                  />
+                </div>
+
+                <div className="field">
+                  <label htmlFor="mood_tags">Mood tags</label>
+                  <div className="helper" style={{ marginBottom: 8 }}>
+                    Select one or more mood tags from the list below.
+                  </div>
+                  <details open style={{ background: 'rgba(255,255,255,0.65)', border: '1px solid rgba(30,41,59,0.12)', borderRadius: 12, padding: 12 }}>
+                    <summary style={{ cursor: 'pointer', fontWeight: 700, marginBottom: 12 }}>
+                      {(() => {
+                        const selectedMoodTags = (bundle?.tags ?? [])
+                          .filter((tag) => tag.tag_type === 'mood')
+                          .map((tag) => tag.tag_value);
+
+                        return selectedMoodTags.length ? `${selectedMoodTags.length} mood tags selected` : 'Select mood tags';
+                      })()}
+                    </summary>
+                    <div className="switch-row" style={{ alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+                      {moodTagOptions.map((option) => {
+                        const checked = (bundle?.tags ?? []).some(
+                          (tag) => tag.tag_type === 'mood' && tag.tag_value === option
+                        );
+
+                        return (
+                          <label key={option} className="check" style={{ minWidth: 180 }}>
+                            <input name="mood_tag" type="checkbox" value={option} defaultChecked={checked} /> {option}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </details>
+                </div>
+
+                <div className="field">
+                  <label>Facilities</label>
+                  <div className="switch-row" style={{ alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+                    {facilityTagOptions.map((option) => {
+                      const checked = (bundle?.tags ?? []).some(
+                        (tag) => tag.tag_type === 'facility' && tag.tag_value === option
+                      );
+
+                      return (
+                        <label key={option} className="check" style={{ minWidth: 160 }}>
+                          <input name="facility" type="checkbox" value={option} defaultChecked={checked} /> {option}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="field">
+                  <label htmlFor="highlights">Highlights</label>
+                  <textarea
+                    id="highlights"
+                    name="highlights"
+                    defaultValue={tagTextFromBundle(bundle?.tags, 'highlight')}
+                    placeholder="Fresh seafood platters\nElegant coastal interiors\nSignature oyster specials"
+                  />
+                </div>
+
+                <div className="field">
+                  <label htmlFor="worth_visit">Worth visit</label>
+                  <textarea
+                    id="worth_visit"
+                    name="worth_visit"
+                    defaultValue={tagTextFromBundle(bundle?.tags, 'worth_visit')}
+                    placeholder="Premium seafood experience\nRelaxed bayfront atmosphere\nExcellent ocean-inspired menu"
+                  />
                 </div>
 
                 <div className="field">

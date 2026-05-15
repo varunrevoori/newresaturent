@@ -76,6 +76,18 @@ export type MediaAsset = {
   storage_public_url: string | null;
 };
 
+export type RestaurantTagType = 'cuisine' | 'facility' | 'highlight' | 'worth_visit' | 'mood';
+
+export type RestaurantTag = {
+  id: string;
+  restaurant_id: string;
+  tag_type: RestaurantTagType;
+  tag_value: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Review = {
   id: string;
   restaurant_id: string;
@@ -106,6 +118,7 @@ export type RestaurantBundle = {
   restaurant: Restaurant;
   openingHours: OpeningHour[];
   mediaAssets: MediaAsset[];
+  tags: RestaurantTag[];
   reviews: Review[];
 };
 
@@ -222,22 +235,25 @@ export async function fetchPendingCount() {
 }
 
 export async function fetchRestaurantBundle(id: string): Promise<RestaurantBundle> {
-  const [restaurantResult, hoursResult, mediaResult, reviewsResult] = await Promise.all([
+  const [restaurantResult, hoursResult, mediaResult, tagsResult, reviewsResult] = await Promise.all([
     supabase.from('restaurants').select(restaurantSelect).eq('id', id).single(),
     supabase.from('restaurant_opening_hours').select('*').eq('restaurant_id', id).order('day_of_week', { ascending: true }),
     supabase.from('restaurant_media_assets').select('*').eq('restaurant_id', id).order('sort_order', { ascending: true }),
+    supabase.from('restaurant_tags').select('*').eq('restaurant_id', id).order('tag_type', { ascending: true }).order('sort_order', { ascending: true }),
     supabase.from('restaurant_reviews').select('*').eq('restaurant_id', id).order('created_at', { ascending: false })
   ]);
 
   if (restaurantResult.error) throw restaurantResult.error;
   if (hoursResult.error) throw hoursResult.error;
   if (mediaResult.error) throw mediaResult.error;
+  if (tagsResult.error) throw tagsResult.error;
   if (reviewsResult.error) throw reviewsResult.error;
 
   return {
     restaurant: restaurantResult.data as Restaurant,
     openingHours: (hoursResult.data ?? []) as OpeningHour[],
     mediaAssets: (mediaResult.data ?? []) as MediaAsset[],
+    tags: (tagsResult.data ?? []) as RestaurantTag[],
     reviews: (reviewsResult.data ?? []) as Review[]
   };
 }
@@ -307,6 +323,72 @@ export async function deleteMediaAsset(id: string) {
   if (error) {
     throw error;
   }
+}
+
+export async function saveRestaurantTags(
+  restaurantId: string,
+  tags: Array<{
+    tag_type: RestaurantTagType;
+    tag_value: string;
+    sort_order: number;
+  }>
+) {
+  function isAuthError(error: unknown) {
+    const err = error as { status?: number | string; code?: string; message?: string } | null;
+    const status = typeof err?.status === 'string' ? Number(err.status) : err?.status;
+    const message = (err?.message ?? '').toLowerCase();
+
+    return (
+      status === 401 ||
+      status === 403 ||
+      err?.code === '401' ||
+      err?.code === '403' ||
+      err?.code === '42501' ||
+      message.includes('unauthorized') ||
+      message.includes('row-level security') ||
+      message.includes('permission denied') ||
+      message.includes('violates row-level security policy')
+    );
+  }
+
+  function errorMessage(prefix: string, error: unknown) {
+    const err = error as { message?: string; details?: string; hint?: string } | null;
+    const details = [err?.message, err?.details, err?.hint].filter(Boolean).join(' | ');
+    return details ? `${prefix}: ${details}` : prefix;
+  }
+
+  const deleteResult = await supabase.from('restaurant_tags').delete().eq('restaurant_id', restaurantId);
+  if (deleteResult.error) {
+    if (isAuthError(deleteResult.error)) {
+      return { saved: false as const, warning: 'Restaurant saved, but mood tags could not be updated due to table permissions.' };
+    }
+
+    throw new Error(errorMessage('Failed to delete existing restaurant tags', deleteResult.error));
+  }
+
+  const normalizedTags = tags
+    .map((tag) => ({
+      restaurant_id: restaurantId,
+      tag_type: tag.tag_type,
+      tag_value: tag.tag_value.trim(),
+      sort_order: tag.sort_order
+    }))
+    .filter((tag) => tag.tag_value.length > 0);
+
+  if (!normalizedTags.length) {
+    return { saved: true as const };
+  }
+
+  const insertResult = await supabase.from('restaurant_tags').insert(normalizedTags);
+  if (insertResult.error) {
+    if (isAuthError(insertResult.error)) {
+      return { saved: false as const, warning: 'Restaurant saved, but mood tags could not be updated due to table permissions.' };
+    }
+
+    throw new Error(errorMessage('Failed to insert restaurant tags', insertResult.error));
+  }
+
+  return { saved: true as const };
 }
 
 export async function saveReview(id: string, changes: ReviewInput) {

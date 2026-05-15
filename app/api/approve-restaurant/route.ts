@@ -93,6 +93,14 @@ async function syncSecondDatabase(restaurantId: string) {
     is_active: row.is_active
   }));
 
+  const tagRows = source.tags.map((row) => ({
+    id: row.id,
+    restaurant_id: source.restaurant.id,
+    tag_type: row.tag_type,
+    tag_value: row.tag_value,
+    sort_order: row.sort_order
+  }));
+
   const clearOpeningHours = await secondDb.from('restaurant_opening_hours').delete().eq('restaurant_id', source.restaurant.id);
   if (clearOpeningHours.error) {
     throw clearOpeningHours.error;
@@ -117,11 +125,24 @@ async function syncSecondDatabase(restaurantId: string) {
     }
   }
 
+  const clearTags = await secondDb.from('restaurant_tags').delete().eq('restaurant_id', source.restaurant.id);
+  if (clearTags.error) {
+    throw clearTags.error;
+  }
+
+  if (tagRows.length) {
+    const insertTags = await secondDb.from('restaurant_tags').insert(tagRows);
+    if (insertTags.error) {
+      throw insertTags.error;
+    }
+  }
+
   return {
     restaurantId: source.restaurant.id,
     restaurantName: source.restaurant.name,
     openingHours: openingRows.length,
     mediaAssets: mediaRows.length,
+    tags: tagRows.length,
     reviews: 0,
     skippedReviews: source.reviews.length
   };
