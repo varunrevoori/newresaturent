@@ -82,14 +82,13 @@ function requiredNumber(formData: FormData, name: string) {
 }
 
 function buildRestaurantUpdate(formData: FormData) {
-  return {
+  const payload = {
     name: formValue(formData.get('name')).trim(),
     phone: nullableString(formData.get('phone')),
     area: nullableString(formData.get('area')),
     city: nullableString(formData.get('city')),
     full_address: nullableString(formData.get('full_address')),
     slug: nullableString(formData.get('slug')),
-    cover_image: nullableString(formData.get('cover_image')),
     latitude: nullableNumber(formData.get('latitude')),
     longitude: nullableNumber(formData.get('longitude')),
     description: nullableString(formData.get('description')),
@@ -123,6 +122,12 @@ function buildRestaurantUpdate(formData: FormData) {
     isapproved: booleanValue(formData, 'isapproved'),
     ai_summary: nullableString(formData.get('ai_summary'))
   };
+
+  if (formData.has('cover_image')) {
+    return { ...payload, cover_image: nullableString(formData.get('cover_image')) };
+  }
+
+  return payload;
 }
 
 function buildOpeningHourPayload(formData: FormData) {
@@ -238,6 +243,21 @@ export default function RestaurantDetailsPage() {
       setNotice('Restaurant details saved.');
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Failed to save restaurant');
+    } finally {
+      setSavingAction(null);
+    }
+  }
+
+  async function handleSetCoverImage(coverImageUrl: string) {
+    setSavingAction('cover-image');
+    setNotice(null);
+
+    try {
+      await updateRestaurant(restaurantId, { cover_image: coverImageUrl });
+      await loadBundle();
+      setNotice('Cover image updated.');
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Failed to update cover image');
     } finally {
       setSavingAction(null);
     }
@@ -592,10 +612,6 @@ export default function RestaurantDetailsPage() {
                     <textarea id="full_address" name="full_address" defaultValue={formValue(restaurant.full_address)} />
                   </div>
                   <div className="field">
-                    <label htmlFor="cover_image">Cover image URL</label>
-                    <input id="cover_image" name="cover_image" type="url" defaultValue={formValue(restaurant.cover_image)} />
-                  </div>
-                  <div className="field">
                     <label htmlFor="latitude">Latitude</label>
                     <input id="latitude" name="latitude" type="number" step="any" defaultValue={formValue(restaurant.latitude)} />
                   </div>
@@ -631,22 +647,7 @@ export default function RestaurantDetailsPage() {
                     <label htmlFor="cover_charge_amount">Cover charge amount</label>
                     <input id="cover_charge_amount" name="cover_charge_amount" type="number" step="any" defaultValue={formValue(restaurant.cover_charge_amount)} />
                   </div>
-                  <div className="field">
-                    <label htmlFor="ad_priority">Ad priority</label>
-                    <input id="ad_priority" name="ad_priority" type="number" step="1" defaultValue={formValue(restaurant.ad_priority)} />
-                  </div>
-                  <div className="field">
-                    <label htmlFor="ad_starts_at">Ad starts at</label>
-                    <input id="ad_starts_at" name="ad_starts_at" type="text" defaultValue={formValue(restaurant.ad_starts_at)} />
-                  </div>
-                  <div className="field">
-                    <label htmlFor="ad_ends_at">Ad ends at</label>
-                    <input id="ad_ends_at" name="ad_ends_at" type="text" defaultValue={formValue(restaurant.ad_ends_at)} />
-                  </div>
-                  <div className="field">
-                    <label htmlFor="ad_badge_text">Ad badge text</label>
-                    <input id="ad_badge_text" name="ad_badge_text" type="text" defaultValue={formValue(restaurant.ad_badge_text)} />
-                  </div>
+                  
                   <div className="field">
                     <label htmlFor="google_place_id">Google place id</label>
                     <input id="google_place_id" name="google_place_id" type="text" defaultValue={formValue(restaurant.google_place_id)} />
@@ -665,14 +666,23 @@ export default function RestaurantDetailsPage() {
                   </div>
                 </div>
 
+               
+
                 <div className="field">
-                  <label htmlFor="description">Description</label>
-                  <textarea id="description" name="description" defaultValue={formValue(restaurant.description)} />
+                  <label htmlFor="ai_summary">AI Description</label>
+                  <textarea id="ai_summary" name="ai_summary" defaultValue={formValue(restaurant.ai_summary)} />
                 </div>
 
                 <div className="field">
-                  <label htmlFor="ai_summary">AI Summary</label>
-                  <textarea id="ai_summary" name="ai_summary" defaultValue={formValue(restaurant.ai_summary)} />
+                  <label>Cover image</label>
+                  <div className="helper">
+                    Select from provided images in the Media Assets section using the "Set as cover" button.
+                  </div>
+                  {restaurant.cover_image ? (
+                    <img src={restaurant.cover_image} alt="Current cover" className="media-preview-image" style={{ maxWidth: 280, marginTop: 10 }} />
+                  ) : (
+                    <div className="helper-box">No cover image selected yet.</div>
+                  )}
                 </div>
 
                 <div className="field">
@@ -685,11 +695,7 @@ export default function RestaurantDetailsPage() {
                   <textarea id="place_types" name="place_types" defaultValue={textFromArray(restaurant.place_types)} />
                 </div>
 
-                <div className="field">
-                  <label htmlFor="menu_json">Menu JSON</label>
-                  <textarea id="menu_json" name="menu_json" defaultValue={jsonText(restaurant.menu_json)} />
-                </div>
-
+             
                 <div className="field">
                   <label htmlFor="source_payload">Source payload JSON</label>
                   <textarea id="source_payload" name="source_payload" defaultValue={jsonText(restaurant.source_payload)} />
@@ -841,6 +847,18 @@ export default function RestaurantDetailsPage() {
                             </button>
                             <img src={mediaUrl(asset)} alt={`${group.label} preview`} className="media-preview-image" />
                             <div className="search-row media-actions">
+                              <button
+                                className="button-ghost"
+                                type="button"
+                                onClick={() => void handleSetCoverImage(mediaUrl(asset))}
+                                disabled={savingAction === 'cover-image'}
+                              >
+                                {restaurant.cover_image === mediaUrl(asset)
+                                  ? 'Cover image'
+                                  : savingAction === 'cover-image'
+                                  ? 'Saving...'
+                                  : 'Set as cover'}
+                              </button>
                               <button
                                 className="button"
                                 type="button"
