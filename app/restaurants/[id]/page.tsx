@@ -8,6 +8,7 @@ import {
   approveRestaurant,
   arrayFromText,
   createMediaAsset,
+  saveMediaAsset,
   createOpeningHour,
   dayLabel,
   deleteMediaAsset,
@@ -354,6 +355,45 @@ export default function RestaurantDetailsPage() {
     } catch (e) {
       setEnhancementStatus((s) => ({ ...s, [assetId]: 'error' }));
       setError(e instanceof Error ? e.message : 'Failed to queue enhancement');
+    }
+  }
+
+  async function handleChangeAssetType(assetId: string, newType: AssetType) {
+    setSavingAction('media-update');
+    setNotice(null);
+    try {
+      await saveMediaAsset(assetId, { asset_type: newType });
+      await loadBundle();
+      setNotice('Asset type updated.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update asset type');
+    } finally {
+      setSavingAction(null);
+    }
+  }
+
+  async function handleDuplicateAsset(asset: any, targetType: AssetType) {
+    setSavingAction('media-duplicate');
+    setNotice(null);
+    try {
+      await createMediaAsset(restaurantId!, {
+        asset_type: targetType,
+        file_url: asset.file_url,
+        file_path: asset.file_path,
+        storage_public_url: asset.storage_public_url,
+        storage_bucket: asset.storage_bucket,
+        storage_path: asset.storage_path,
+        mime_type: asset.mime_type,
+        is_active: asset.is_active,
+        sort_order: asset.sort_order
+      });
+
+      await loadBundle();
+      setNotice('Asset duplicated to target group.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to duplicate asset');
+    } finally {
+      setSavingAction(null);
     }
   }
 
@@ -841,6 +881,35 @@ export default function RestaurantDetailsPage() {
                             </button>
                             <img src={mediaUrl(asset)} alt={`${group.label} preview`} className="media-preview-image" />
                             <div className="search-row media-actions">
+                              <select
+                                className="asset-type-select"
+                                value={asset.asset_type}
+                                onChange={(e) => void handleChangeAssetType(asset.id, e.target.value as AssetType)}
+                                aria-label="Change asset type"
+                              >
+                                <option value="food">Food</option>
+                                <option value="ambience">Ambience</option>
+                                <option value="menu">Menu</option>
+                              </select>
+
+                              <select
+                                className="asset-duplicate-select"
+                                defaultValue=""
+                                onChange={(e) => {
+                                  const v = e.target.value as AssetType;
+                                  if (v) {
+                                    void handleDuplicateAsset(asset, v);
+                                    e.currentTarget.value = '';
+                                  }
+                                }}
+                                aria-label="Duplicate asset to group"
+                              >
+                                <option value="">Duplicate as...</option>
+                                <option value="food">Food</option>
+                                <option value="ambience">Ambience</option>
+                                <option value="menu">Menu</option>
+                              </select>
+
                               <button
                                 className="button"
                                 type="button"
