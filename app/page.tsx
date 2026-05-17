@@ -14,7 +14,7 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [showApproved, setShowApproved] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<'pending' | 'approved'>('pending');
   const [savingId, setSavingId] = useState<string | null>(null);
   const [reloadCount, setReloadCount] = useState(0);
   const [approvedCountGlobal, setApprovedCountGlobal] = useState(0);
@@ -29,7 +29,7 @@ export default function HomePage() {
 
       try {
         const [data, approvedCount, pendingCount] = await Promise.all([
-          fetchRestaurants(showApproved),
+          fetchRestaurants(activeFilter === 'approved'),
           fetchApprovedCount(),
           fetchPendingCount()
         ]);
@@ -54,7 +54,7 @@ export default function HomePage() {
     return () => {
       active = false;
     };
-  }, [showApproved, reloadCount]);
+  }, [activeFilter, reloadCount]);
 
   const filteredRestaurants = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -79,11 +79,7 @@ export default function HomePage() {
 
     try {
       await approveRestaurant(restaurantId, true);
-      setRestaurants((current) =>
-        current.map((restaurant) =>
-          restaurant.id === restaurantId ? { ...restaurant, isapproved: true } : restaurant
-        )
-      );
+      setReloadCount((current) => current + 1);
     } catch (approveError) {
       setError(approveError instanceof Error ? approveError.message : 'Failed to approve restaurant');
     } finally {
@@ -111,8 +107,19 @@ export default function HomePage() {
                 placeholder="Search by name, city, area, slug, or Google place id"
                 style={{ minWidth: 280, width: 'min(520px, 100%)' }}
               />
-              <button className="toggle" type="button" onClick={() => setShowApproved((current) => !current)}>
-                {showApproved ? 'Show pending only' : 'Show pending and approved'}
+              <button
+                className={activeFilter === 'approved' ? 'button' : 'button-ghost'}
+                type="button"
+                onClick={() => setActiveFilter('approved')}
+              >
+                Approved ({approvedCount})
+              </button>
+              <button
+                className={activeFilter === 'pending' ? 'button' : 'button-ghost'}
+                type="button"
+                onClick={() => setActiveFilter('pending')}
+              >
+                Pending ({pendingCount})
               </button>
             </div>
 
@@ -130,7 +137,7 @@ export default function HomePage() {
           <div className="card stat">
             <span className="small">Loaded restaurants</span>
             <strong>{restaurants.length}</strong>
-            <span className="meta">Current filter: {showApproved ? 'all restaurants' : 'pending only'}</span>
+            <span className="meta">Current filter: {activeFilter === 'approved' ? 'approved restaurants' : 'pending restaurants'}</span>
           </div>
           <div className="card stat">
             <span className="small">Pending review</span>

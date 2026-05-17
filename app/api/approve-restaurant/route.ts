@@ -75,7 +75,6 @@ async function syncSecondDatabase(restaurantId: string) {
   }
 
   const openingRows = source.openingHours.map((row) => ({
-    id: row.id,
     restaurant_id: source.restaurant.id,
     day_of_week: row.day_of_week,
     open_time: row.open_time,
@@ -101,15 +100,13 @@ async function syncSecondDatabase(restaurantId: string) {
     sort_order: row.sort_order
   }));
 
-  const clearOpeningHours = await secondDb.from('restaurant_opening_hours').delete().eq('restaurant_id', source.restaurant.id);
-  if (clearOpeningHours.error) {
-    throw clearOpeningHours.error;
-  }
-
   if (openingRows.length) {
-    const insertOpeningHours = await secondDb.from('restaurant_opening_hours').insert(openingRows);
-    if (insertOpeningHours.error) {
-      throw insertOpeningHours.error;
+    const upsertOpeningHours = await secondDb
+      .from('restaurant_opening_hours')
+      .upsert(openingRows, { onConflict: 'restaurant_id,day_of_week' });
+
+    if (upsertOpeningHours.error) {
+      throw upsertOpeningHours.error;
     }
   }
 

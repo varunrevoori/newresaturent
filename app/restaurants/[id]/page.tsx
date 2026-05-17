@@ -85,13 +85,16 @@ function requiredNumber(formData: FormData, name: string) {
 }
 
 function buildRestaurantUpdate(formData: FormData) {
+  const name = formValue(formData.get('name')).trim();
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+
   const payload = {
-    name: formValue(formData.get('name')).trim(),
+    name,
     phone: nullableString(formData.get('phone')),
     area: nullableString(formData.get('area')),
     city: nullableString(formData.get('city')),
     full_address: nullableString(formData.get('full_address')),
-    slug: nullableString(formData.get('slug')),
+    slug,
     latitude: nullableNumber(formData.get('latitude')),
     longitude: nullableNumber(formData.get('longitude')),
     description: nullableString(formData.get('description')),
@@ -318,6 +321,21 @@ export default function RestaurantDetailsPage() {
     }
   }
 
+  async function syncOpeningHours() {
+    const response = await fetch('/api/sync-opening-hours', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ id: restaurantId })
+    });
+
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    if (!response.ok) {
+      throw new Error(payload?.error ?? 'Failed to sync opening hours');
+    }
+  }
+
   useEffect(() => {
     void loadBundle();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -396,6 +414,7 @@ export default function RestaurantDetailsPage() {
 
     try {
       await saveOpeningHour(id, buildOpeningHourPayload(new FormData(event.currentTarget)));
+      await syncOpeningHours();
       await loadBundle();
       setNotice('Opening hours updated.');
     } catch (saveError) {
@@ -413,6 +432,7 @@ export default function RestaurantDetailsPage() {
     try {
       await createOpeningHour(restaurantId, buildOpeningHourPayload(new FormData(event.currentTarget)));
       event.currentTarget.reset();
+      await syncOpeningHours();
       await loadBundle();
       setNotice('New opening hour row added.');
     } catch (saveError) {
@@ -432,6 +452,7 @@ export default function RestaurantDetailsPage() {
 
     try {
       await deleteOpeningHour(id);
+      await syncOpeningHours();
       await loadBundle();
       setNotice('Opening hour row deleted.');
     } catch (deleteError) {
@@ -754,7 +775,7 @@ export default function RestaurantDetailsPage() {
                   </div>
                   <div className="field">
                     <label htmlFor="slug">Slug</label>
-                    <input id="slug" name="slug" type="text" defaultValue={formValue(restaurant.slug)} />
+                    <input id="slug" name="slug" type="text" defaultValue={formValue(restaurant.slug)} disabled title="Auto-generated from name" />
                   </div>
                   <div className="field">
                     <label htmlFor="phone">Phone</label>
