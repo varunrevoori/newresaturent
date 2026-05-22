@@ -94,7 +94,7 @@ export default function HomePage() {
           <span className="kicker">Restaurant moderation dashboard</span>
           <h1>Review every restaurant, approve pending records, and edit the full listing in one place.</h1>
           <p>
-            The home page shows restaurants where <strong>isapproved</strong> is false or null. Open any card to edit the core
+            The home page shows restaurants where <strong>isapproved</strong> is false. Open any card to edit the core
             restaurant record plus opening hours, media assets, and reviews.
           </p>
 

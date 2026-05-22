@@ -22,6 +22,7 @@ import {
   RestaurantBundle,
   saveOpeningHour,
   saveReview,
+  syncRestaurantMirror,
   textFromArray,
   updateRestaurant
 } from '@/lib/dashboard';
@@ -137,11 +138,13 @@ function buildRestaurantUpdate(formData: FormData) {
 }
 
 function buildOpeningHourPayload(formData: FormData) {
+  const isClosed = booleanValue(formData, 'is_closed');
+
   return {
     day_of_week: Number(formValue(formData.get('day_of_week'))),
-    open_time: nullableString(formData.get('open_time')),
-    close_time: nullableString(formData.get('close_time')),
-    is_closed: booleanValue(formData, 'is_closed')
+    open_time: isClosed ? null : nullableString(formData.get('open_time')),
+    close_time: isClosed ? null : nullableString(formData.get('close_time')),
+    is_closed: isClosed
   };
 }
 
@@ -334,6 +337,16 @@ export default function RestaurantDetailsPage() {
     if (!response.ok) {
       throw new Error(payload?.error ?? 'Failed to sync opening hours');
     }
+
+    return payload;
+  }
+
+  async function republishIfApproved() {
+    if (bundle?.restaurant.isapproved !== true) {
+      return;
+    }
+
+    await approveRestaurant(restaurantId, true);
   }
 
   useEffect(() => {
@@ -378,7 +391,9 @@ export default function RestaurantDetailsPage() {
       }
 
       await updateRestaurant(restaurantId, payload);
+      await syncRestaurantMirror(restaurantId, payload);
       const tagSaveResult = await saveRestaurantTagsForForm(restaurantId, buildRestaurantTagPayload(formData));
+      await republishIfApproved();
       await loadBundle();
       setNotice(tagSaveResult.warning ?? 'Restaurant details saved.');
     } catch (saveError) {
@@ -398,6 +413,8 @@ export default function RestaurantDetailsPage() {
 
     try {
       await updateRestaurant(restaurantId, { cover_image: coverImageUrl });
+      await syncRestaurantMirror(restaurantId, { cover_image: coverImageUrl });
+      await republishIfApproved();
       await loadBundle();
       setNotice('Cover image updated.');
     } catch (saveError) {
@@ -414,8 +431,13 @@ export default function RestaurantDetailsPage() {
 
     try {
       await saveOpeningHour(id, buildOpeningHourPayload(new FormData(event.currentTarget)));
-      await syncOpeningHours();
       await loadBundle();
+      try {
+        await syncOpeningHours();
+      } catch (syncError) {
+        setNotice(syncError instanceof Error ? `Saved locally, but mirror sync failed: ${syncError.message}` : 'Saved locally, but mirror sync failed.');
+        return;
+      }
       setNotice('Opening hours updated.');
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Failed to save opening hours');
@@ -430,10 +452,16 @@ export default function RestaurantDetailsPage() {
     setNotice(null);
 
     try {
-      await createOpeningHour(restaurantId, buildOpeningHourPayload(new FormData(event.currentTarget)));
-      event.currentTarget.reset();
-      await syncOpeningHours();
+      const formElement = event.currentTarget;
+      await createOpeningHour(restaurantId, buildOpeningHourPayload(new FormData(formElement)));
+      formElement.reset();
       await loadBundle();
+      try {
+        await syncOpeningHours();
+      } catch (syncError) {
+        setNotice(syncError instanceof Error ? `Saved locally, but mirror sync failed: ${syncError.message}` : 'Saved locally, but mirror sync failed.');
+        return;
+      }
       setNotice('New opening hour row added.');
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Failed to add opening hour');
@@ -452,8 +480,13 @@ export default function RestaurantDetailsPage() {
 
     try {
       await deleteOpeningHour(id);
-      await syncOpeningHours();
       await loadBundle();
+      try {
+        await syncOpeningHours();
+      } catch (syncError) {
+        setNotice(syncError instanceof Error ? `Deleted locally, but mirror sync failed: ${syncError.message}` : 'Deleted locally, but mirror sync failed.');
+        return;
+      }
       setNotice('Opening hour row deleted.');
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : 'Failed to delete opening hour');
@@ -616,6 +649,7 @@ export default function RestaurantDetailsPage() {
 
     try {
       const baseSort = (bundle?.mediaAssets.length ?? 0) + 1;
+      const DEFAULT_BUCKET = 'gmap-scrapper-media-prod';
       const existingBuckets = Array.from(
         new Set((bundle?.mediaAssets ?? []).map((asset) => asset.storage_bucket).filter(Boolean))
       ) as string[];
@@ -623,6 +657,7 @@ export default function RestaurantDetailsPage() {
         new Set([
           ...existingBuckets,
           process.env.NEXT_PUBLIC_SUPABASE_MEDIA_BUCKET,
+          DEFAULT_BUCKET,
           'restaurant-media',
           'restaurant_media',
           'media-assets',
@@ -637,13 +672,58 @@ export default function RestaurantDetailsPage() {
 
       let resolvedBucket: string | null = null;
 
+      async function bucketExists(bucketName: string) {
+        try {
+          // try listing the root to detect bucket existence
+          const { error } = await supabase.storage.from(bucketName).list('', { limit: 1 });
+          if (error) {
+            return !isBucketNotFoundError(error.message);
+          }
+
+          return true;
+        } catch (e) {
+          return false;
+        }
+      }
+
+      // Probe which candidate buckets actually exist. If none exist, attempt to create the default bucket via server API.
+      const availableBuckets: string[] = [];
+      for (const b of candidateBuckets) {
+        // eslint-disable-next-line no-await-in-loop
+        if (await bucketExists(b)) availableBuckets.push(b);
+      }
+
+      if (availableBuckets.length === 0) {
+        // try to create the default bucket via server admin API
+        try {
+          const res = await fetch('/api/create-bucket', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ bucket: DEFAULT_BUCKET })
+          });
+
+          const payload = await res.json().catch(() => null);
+          if (res.ok && (payload?.status === 'created' || payload?.status === 'exists')) {
+            availableBuckets.push(DEFAULT_BUCKET);
+          } else {
+            throw new Error(payload?.error || 'Failed to create default bucket');
+          }
+        } catch (e) {
+          throw new Error(
+            e instanceof Error
+              ? `No available storage buckets and failed to create default bucket: ${e.message}`
+              : 'No available storage buckets'
+          );
+        }
+      }
+
       for (let index = 0; index < localMediaPreviews.length; index += 1) {
         const preview = localMediaPreviews[index];
         let uploadBucket: string | null = resolvedBucket;
         let storagePath = '';
         let uploadErrorMessage = '';
 
-        const tryBuckets: string[] = uploadBucket ? [uploadBucket] : candidateBuckets;
+        const tryBuckets: string[] = uploadBucket ? [uploadBucket] : availableBuckets;
 
         for (const bucket of tryBuckets) {
           storagePath = `${restaurantId}/${preview.assetType}/${Date.now()}-${index}-${sanitizeFileName(preview.fileName)}`;

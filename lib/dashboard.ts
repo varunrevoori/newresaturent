@@ -174,6 +174,30 @@ export type ReviewInput = Partial<Pick<Review, 'rating' | 'review_text' | 'is_ap
   photo_urls?: string[];
 };
 
+function normalizeOpeningHourInput(changes: OpeningHourInput) {
+  if (!changes.is_closed) {
+    return changes;
+  }
+
+  return {
+    ...changes,
+    open_time: null,
+    close_time: null,
+    is_closed: true
+  };
+}
+
+function normalizeOpeningHourRow(row: OpeningHourInput) {
+  const normalized = normalizeOpeningHourInput(row);
+
+  return {
+    day_of_week: normalized.day_of_week,
+    open_time: normalized.open_time ?? null,
+    close_time: normalized.close_time ?? null,
+    is_closed: normalized.is_closed ?? false
+  };
+}
+
 const restaurantSelect = `
   id, name, phone, area, city, full_address, slug, cover_image, latitude, longitude,
   description, ai_summary, cost_for_two, is_active, owner_user_id, is_pure_veg, booking_enabled,
@@ -196,9 +220,7 @@ function normalizeSupabaseUrl(value: string | undefined) {
 export async function fetchRestaurants(includeApproved = false) {
   const query = supabase.from('restaurants').select(restaurantSelect).order('created_at', { ascending: false });
 
-  if (!includeApproved) {
-    query.or('isapproved.is.null,isapproved.eq.false');
-  }
+  query.eq('isapproved', includeApproved);
 
   const { data, error } = await query;
   if (error) {
@@ -225,7 +247,7 @@ export async function fetchPendingCount() {
   const { count, error } = await supabase
     .from('restaurants')
     .select('*', { count: 'exact', head: true })
-    .or('isapproved.is.null,isapproved.eq.false');
+    .eq('isapproved', false);
 
   if (error) {
     throw error;
@@ -276,6 +298,24 @@ export async function approveRestaurant(id: string, isapproved: boolean) {
   return payload;
 }
 
+export async function syncRestaurantMirror(id: string, changes: Record<string, unknown>) {
+  const response = await fetch('/api/sync-restaurant', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ id, changes })
+  });
+
+  const payload = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
+
+  if (!response.ok) {
+    throw new Error(payload?.error ?? 'Failed to sync restaurant mirror');
+  }
+
+  return payload;
+}
+
 export async function updateRestaurant(id: string, changes: RestaurantUpdateInput) {
   const { error } = await supabase.from('restaurants').update(changes).eq('id', id);
   if (error) {
@@ -284,17 +324,38 @@ export async function updateRestaurant(id: string, changes: RestaurantUpdateInpu
 }
 
 export async function saveOpeningHour(id: string, changes: OpeningHourInput) {
-  const { error } = await supabase.from('restaurant_opening_hours').update(changes).eq('id', id);
+  const { error } = await supabase.from('restaurant_opening_hours').update(normalizeOpeningHourInput(changes)).eq('id', id);
   if (error) {
-    throw error;
+    const msg = (error as { message?: string }).message ?? String(error);
+    if (msg.toLowerCase().includes('unauthorized') || msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('row-level')) {
+      throw new Error('Permission denied when updating opening hour. Check Supabase table policies or use a service role key.');
+    }
+
+    throw new Error(msg);
   }
 }
 
 export async function createOpeningHour(restaurantsId: string, changes: OpeningHourInput) {
-  const { error } = await supabase.from('restaurant_opening_hours').insert({ restaurant_id: restaurantsId, ...changes });
-  if (error) {
-    throw error;
+  const normalized = normalizeOpeningHourRow(changes);
+
+  if (normalized.day_of_week === undefined || normalized.day_of_week === null) {
+    throw new Error('day_of_week is required');
   }
+
+  const { data, error } = await supabase
+    .from('restaurant_opening_hours')
+    .upsert({ restaurant_id: restaurantsId, ...normalized }, { onConflict: 'restaurant_id,day_of_week' })
+    .select('*');
+  if (error) {
+    const msg = (error as { message?: string; details?: string }).message ?? String(error);
+    if (msg.toLowerCase().includes('unauthorized') || msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('row-level')) {
+      throw new Error('Permission denied when creating opening hour. Check Supabase table RLS/policies or API keys.');
+    }
+
+    throw new Error(msg + (error && typeof error === 'object' && 'details' in error ? `: ${(error as any).details}` : ''));
+  }
+
+  return (data ?? [])[0] ?? null;
 }
 
 export async function deleteOpeningHour(id: string) {
