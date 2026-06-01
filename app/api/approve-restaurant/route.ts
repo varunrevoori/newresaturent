@@ -4,6 +4,7 @@ import { fetchRestaurantBundle } from '@/lib/dashboard';
 import { supabase } from '@/lib/supabase';
 
 type SourceReview = Awaited<ReturnType<typeof fetchRestaurantBundle>>['reviews'][number];
+const allowedTagTypes = new Set(['cuisine', 'facility', 'highlight', 'worth_visit', 'mood']);
 
 function normalizeSupabaseUrl(value: string | undefined) {
   if (!value) {
@@ -42,6 +43,100 @@ function normalizeOpeningHours(rows: Array<{ day_of_week: number; open_time: str
   });
 
   return Array.from(uniqueRows.values());
+}
+
+function buildOpeningHoursCompatRows(
+  rows: Array<{ restaurant_id: string; day_of_week: number; open_time: string | null; close_time: string | null; is_closed: boolean }>
+) {
+  return rows.map((row) => {
+    if (!row.is_closed) {
+      return row;
+    }
+
+    // Some target schemas reject NULL times even when is_closed is true.
+    return {
+      ...row,
+      open_time: row.open_time ?? '00:00:00',
+      close_time: row.close_time ?? '00:00:00'
+    };
+  });
+}
+
+function looksLikeClosedTimeCompatibilityIssue(message: string) {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('null value') ||
+    normalized.includes('not-null') ||
+    normalized.includes('violates not-null') ||
+    normalized.includes('open_time') ||
+    normalized.includes('close_time')
+  );
+}
+
+function normalizeTagRows(
+  restaurantId: string,
+  tags: Array<{ tag_type: string; tag_value: string; sort_order: number }>
+) {
+  const deduped = new Map<string, { restaurant_id: string; tag_type: string; tag_value: string; sort_order: number }>();
+
+  for (const tag of tags) {
+    const tagType = String(tag.tag_type || '').trim().toLowerCase();
+    const tagValue = String(tag.tag_value || '').trim();
+
+    if (!allowedTagTypes.has(tagType) || !tagValue) {
+      continue;
+    }
+
+    const key = `${restaurantId}:${tagType}:${tagValue.toLowerCase()}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, {
+        restaurant_id: restaurantId,
+        tag_type: tagType,
+        tag_value: tagValue,
+        sort_order: Number.isFinite(tag.sort_order) ? tag.sort_order : 100
+      });
+    }
+  }
+
+  return Array.from(deduped.values());
+}
+
+async function syncTagsWithFallback(
+  secondDb: ReturnType<typeof createSecondAdminClient>,
+  rows: Array<{ restaurant_id: string; tag_type: string; tag_value: string; sort_order: number }>
+) {
+  const output = {
+    inserted: 0,
+    failed: 0,
+    errors: [] as string[]
+  };
+
+  if (!rows.length) {
+    return output;
+  }
+
+  const bulkInsert = await secondDb.from('restaurant_tags').insert(rows);
+  if (!bulkInsert.error) {
+    output.inserted = rows.length;
+    return output;
+  }
+
+  output.errors.push(bulkInsert.error.message || String(bulkInsert.error));
+
+  for (const row of rows) {
+    const singleInsert = await secondDb
+      .from('restaurant_tags')
+      .upsert(row, { onConflict: 'restaurant_id,tag_type,tag_value' });
+
+    if (singleInsert.error) {
+      output.failed += 1;
+      output.errors.push(`${row.tag_type}:${row.tag_value} -> ${singleInsert.error.message || String(singleInsert.error)}`);
+    } else {
+      output.inserted += 1;
+    }
+  }
+
+  return output;
 }
 
 function toRatingValue(value: number | string | null | undefined) {
@@ -288,13 +383,14 @@ async function syncSecondDatabase(restaurantId: string) {
     is_active: row.is_active
   }));
 
-  const tagRows = source.tags.map((row) => ({
-    id: row.id,
-    restaurant_id: source.restaurant.id,
-    tag_type: row.tag_type,
-    tag_value: row.tag_value,
-    sort_order: row.sort_order
-  }));
+  const tagRows = normalizeTagRows(
+    source.restaurant.id,
+    source.tags.map((row) => ({
+      tag_type: row.tag_type,
+      tag_value: row.tag_value,
+      sort_order: row.sort_order
+    }))
+  );
 
   if (openingRows.length) {
     try {
@@ -307,8 +403,24 @@ async function syncSecondDatabase(restaurantId: string) {
           .from('restaurant_opening_hours')
           .upsert(openingRows, { onConflict: 'restaurant_id,day_of_week' });
         if (insertOpeningHours.error) {
-          result.openingHoursInsertError = insertOpeningHours.error.message || String(insertOpeningHours.error);
-          result.openingHours = 0;
+          const message = insertOpeningHours.error.message || String(insertOpeningHours.error);
+          if (!looksLikeClosedTimeCompatibilityIssue(message)) {
+            result.openingHoursInsertError = message;
+            result.openingHours = 0;
+          } else {
+            const compatRows = buildOpeningHoursCompatRows(openingRows);
+            const compatInsert = await secondDb
+              .from('restaurant_opening_hours')
+              .upsert(compatRows, { onConflict: 'restaurant_id,day_of_week' });
+
+            if (compatInsert.error) {
+              result.openingHoursInsertError = compatInsert.error.message || String(compatInsert.error);
+              result.openingHours = 0;
+            } else {
+              result.openingHours = compatRows.length;
+              result.openingHoursCompat = true;
+            }
+          }
         } else {
           result.openingHours = openingRows.length;
         }
@@ -376,19 +488,20 @@ async function syncSecondDatabase(restaurantId: string) {
 
   if (tagRows.length) {
     try {
-      const insertTags = await secondDb.from('restaurant_tags').insert(tagRows);
-      if (insertTags.error) {
-        result.insertTagsError = insertTags.error.message || String(insertTags.error);
-        result.tags = 0;
-      } else {
-        result.tags = tagRows.length;
+      const tagSync = await syncTagsWithFallback(secondDb, tagRows);
+      result.tags = tagSync.inserted;
+      result.failedTags = tagSync.failed;
+      if (tagSync.errors.length) {
+        result.insertTagsError = tagSync.errors.join(' | ');
       }
     } catch (err) {
       result.insertTagsError = err instanceof Error ? err.message : String(err);
       result.tags = 0;
+      result.failedTags = tagRows.length;
     }
   } else {
     result.tags = 0;
+    result.failedTags = 0;
   }
 
   try {
@@ -427,6 +540,18 @@ async function syncSecondDatabase(restaurantId: string) {
     }
   }
 
+  const criticalSyncErrors = [
+    result.restaurantUpsertError,
+    result.openingHoursDeleteError,
+    result.openingHoursInsertError,
+    result.clearTagsError,
+    result.insertTagsError
+  ].filter(Boolean);
+
+  if (criticalSyncErrors.length) {
+    throw new Error(`Second DB sync failed for required tables: ${criticalSyncErrors.join(' | ')}`);
+  }
+
   return result;
 }
 
@@ -449,14 +574,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ status: 'updated', approved: false });
     }
 
-    let syncResult: Record<string, unknown> | null = null;
-    let syncError: string | null = null;
-
-    try {
-      syncResult = await syncSecondDatabase(restaurantId);
-    } catch (err) {
-      syncError = err instanceof Error ? err.message : String(err);
-    }
+    const syncResult = await syncSecondDatabase(restaurantId);
 
     const { error } = await supabase.from('restaurants').update({ isapproved: true }).eq('id', restaurantId);
     if (error) {
@@ -467,10 +585,6 @@ export async function POST(request: Request) {
     if (syncResult) {
       payload.message = 'Approved and synced restaurant tables. Auth/public user creation is skipped for now.';
       Object.assign(payload, syncResult);
-    }
-
-    if (syncError) {
-      payload.syncWarning = syncError;
     }
 
     return NextResponse.json(payload);
