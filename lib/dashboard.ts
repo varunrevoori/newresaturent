@@ -453,7 +453,21 @@ export async function saveRestaurantTags(
 }
 
 export async function saveReview(id: string, changes: ReviewInput) {
-  const { error } = await supabase.from('restaurant_reviews').update(changes).eq('id', id);
+  const payload = {
+    rating: changes.rating,
+    review_text: changes.review_text,
+    is_approved: changes.is_approved,
+    food_rating: changes.food_rating,
+    service_rating: changes.service_rating,
+    ambience_rating: changes.ambience_rating,
+    drinks_rating: changes.drinks_rating,
+    crowd_rating: changes.crowd_rating,
+    owner_reply_text: changes.owner_reply_text,
+    liked_tags: changes.liked_tags,
+    photo_urls: changes.photo_urls
+  };
+
+  const { error } = await supabase.from('restaurant_reviews').update(payload).eq('id', id);
   if (error) {
     throw error;
   }

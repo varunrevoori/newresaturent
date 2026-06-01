@@ -145,7 +145,13 @@ function toRatingValue(value: number | string | null | undefined) {
   }
 
   const parsed = typeof value === 'string' ? Number(value) : value;
-  return Number.isFinite(parsed) ? Number(parsed.toFixed(1)) : null;
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+
+  // Keep ratings compatible with DB checks and numeric(2,1) style constraints.
+  const clamped = Math.max(0, Math.min(5, parsed));
+  return Number(clamped.toFixed(1));
 }
 
 function buildSecondDatabaseReviewRows(restaurantId: string, reviews: SourceReview[]) {
@@ -157,7 +163,7 @@ function buildSecondDatabaseReviewRows(restaurantId: string, reviews: SourceRevi
     return {
       id: review.id,
       restaurant_id: restaurantId,
-      user_id: review.user_id,
+      user_id: review.user_id ?? review.owner_reply_by ?? null,
       rating,
       review_text: review.review_text,
       liked_tags: review.liked_tags ?? [],
@@ -211,25 +217,6 @@ async function syncReviewsWithFallback(
     return output;
   }
 
-  const bulkInsert = await secondDb.from('restaurant_reviews').insert(rows);
-  if (!bulkInsert.error) {
-    output.inserted = rows.length;
-    return output;
-  }
-
-  output.errors.push(bulkInsert.error.message || String(bulkInsert.error));
-
-  function isUserForeignKeyError(message: string) {
-    const normalized = message.toLowerCase();
-    return (
-      normalized.includes('restaurant_reviews_user_id_fkey') ||
-      normalized.includes('foreign key') ||
-      normalized.includes('user_id') ||
-      normalized.includes('not-null') ||
-      normalized.includes('null value')
-    );
-  }
-
   async function getMirrorFallbackUserId() {
     const email = `mirror-review+${restaurantId}@local.invalid`;
 
@@ -254,17 +241,65 @@ async function syncReviewsWithFallback(
       return null;
     }
 
-    const existingUser = listed.data.users.find((user) => user.email?.toLowerCase() === email.toLowerCase());
-    return existingUser?.id ?? null;
+    const existingMirrorUser = listed.data.users.find((user) => user.email?.toLowerCase() === email.toLowerCase());
+    if (existingMirrorUser?.id) {
+      return existingMirrorUser.id;
+    }
+
+    // Last resort: use any existing auth user id to satisfy strict NOT NULL + FK schemas.
+    return listed.data.users[0]?.id ?? null;
   }
 
   let mirrorFallbackUserId: string | null = null;
+  if (rows.some((row) => !row.user_id)) {
+    mirrorFallbackUserId = await getMirrorFallbackUserId();
+  }
+
+  const preparedRows = rows
+    .map((row) => ({
+      ...row,
+      user_id: row.user_id ?? mirrorFallbackUserId
+    }))
+    .filter((row): row is (typeof rows)[number] & { user_id: string } => Boolean(row.user_id));
+
+  if (!preparedRows.length) {
+    output.failed = rows.length;
+    output.errors.push('No valid user_id available to sync reviews to second DB.');
+    return output;
+  }
+
+  const bulkInsert = await secondDb.from('restaurant_reviews').insert(preparedRows);
+  if (!bulkInsert.error) {
+    output.inserted = preparedRows.length;
+    if (preparedRows.length !== rows.length) {
+      output.failed += rows.length - preparedRows.length;
+      output.errors.push(`Skipped ${rows.length - preparedRows.length} review row(s) with missing user_id.`);
+    }
+    return output;
+  }
+
+  output.errors.push(bulkInsert.error.message || String(bulkInsert.error));
+
+  function isUserForeignKeyError(message: string) {
+    const normalized = message.toLowerCase();
+    return (
+      normalized.includes('restaurant_reviews_user_id_fkey') ||
+      normalized.includes('foreign key') ||
+      normalized.includes('user_id') ||
+      normalized.includes('not-null') ||
+      normalized.includes('null value')
+    );
+  }
+
+  function isOwnerReplyForeignKeyError(message: string) {
+    const normalized = message.toLowerCase();
+    return normalized.includes('restaurant_reviews_owner_reply_by_fkey') || normalized.includes('owner_reply_by');
+  }
 
   // Fallback to per-row upsert so one bad row does not block all valid reviews.
-  for (const row of rows) {
-    let singleInsert = await secondDb
-      .from('restaurant_reviews')
-      .upsert({ ...row, user_id: row.user_id ?? mirrorFallbackUserId }, { onConflict: 'id' });
+  for (const row of preparedRows) {
+    let reviewPayload = { ...row, user_id: row.user_id };
+    let singleInsert = await secondDb.from('restaurant_reviews').upsert(reviewPayload, { onConflict: 'id' });
 
     if (singleInsert.error && isUserForeignKeyError(singleInsert.error.message || String(singleInsert.error))) {
       if (!mirrorFallbackUserId) {
@@ -272,10 +307,14 @@ async function syncReviewsWithFallback(
       }
 
       if (mirrorFallbackUserId) {
-        singleInsert = await secondDb
-          .from('restaurant_reviews')
-          .upsert({ ...row, user_id: mirrorFallbackUserId }, { onConflict: 'id' });
+        reviewPayload = { ...reviewPayload, user_id: mirrorFallbackUserId };
+        singleInsert = await secondDb.from('restaurant_reviews').upsert(reviewPayload, { onConflict: 'id' });
       }
+    }
+
+    if (singleInsert.error && isOwnerReplyForeignKeyError(singleInsert.error.message || String(singleInsert.error))) {
+      reviewPayload = { ...reviewPayload, owner_reply_by: null };
+      singleInsert = await secondDb.from('restaurant_reviews').upsert(reviewPayload, { onConflict: 'id' });
     }
 
     if (singleInsert.error) {
@@ -545,8 +584,13 @@ async function syncSecondDatabase(restaurantId: string) {
     result.openingHoursDeleteError,
     result.openingHoursInsertError,
     result.clearTagsError,
-    result.insertTagsError
+    result.insertTagsError,
+    result.insertReviewsError
   ].filter(Boolean);
+
+  if ((result.failedReviews ?? 0) > 0) {
+    criticalSyncErrors.push(`Failed to sync ${result.failedReviews} review row(s)`);
+  }
 
   if (criticalSyncErrors.length) {
     throw new Error(`Second DB sync failed for required tables: ${criticalSyncErrors.join(' | ')}`);
