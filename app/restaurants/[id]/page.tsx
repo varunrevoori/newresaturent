@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import type { FormEvent } from 'react';
+import type { ChangeEvent, FormEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import {
@@ -24,7 +24,7 @@ import {
   saveReview,
   syncRestaurantMirror,
   textFromArray,
-  updateRestaurant
+  updateRestaurant,
 } from '@/lib/dashboard';
 import { supabase } from '@/lib/supabase';
 
@@ -44,7 +44,9 @@ function sanitizeFileName(fileName: string) {
 
 function isBucketNotFoundError(message: string) {
   const normalized = message.toLowerCase();
-  return normalized.includes('bucket not found') || normalized.includes('not found');
+  return (
+    normalized.includes('bucket not found') || normalized.includes('not found')
+  );
 }
 
 function formValue(value: unknown) {
@@ -87,7 +89,10 @@ function requiredNumber(formData: FormData, name: string) {
 
 function buildRestaurantUpdate(formData: FormData) {
   const name = formValue(formData.get('name')).trim();
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)+/g, '');
 
   const payload = {
     name,
@@ -104,12 +109,18 @@ function buildRestaurantUpdate(formData: FormData) {
     is_pure_veg: booleanValue(formData, 'is_pure_veg'),
     booking_enabled: booleanValue(formData, 'booking_enabled'),
     avg_duration_minutes: requiredNumber(formData, 'avg_duration_minutes'),
-    max_bookings_per_slot: nullableNumber(formData.get('max_bookings_per_slot')),
+    max_bookings_per_slot: nullableNumber(
+      formData.get('max_bookings_per_slot'),
+    ),
     advance_booking_days: requiredNumber(formData, 'advance_booking_days'),
     modification_available: booleanValue(formData, 'modification_available'),
-    modification_cutoff_minutes: nullableNumber(formData.get('modification_cutoff_minutes')),
+    modification_cutoff_minutes: nullableNumber(
+      formData.get('modification_cutoff_minutes'),
+    ),
     cancellation_available: booleanValue(formData, 'cancellation_available'),
-    cancellation_cutoff_minutes: nullableNumber(formData.get('cancellation_cutoff_minutes')),
+    cancellation_cutoff_minutes: nullableNumber(
+      formData.get('cancellation_cutoff_minutes'),
+    ),
     cover_charge_enabled: booleanValue(formData, 'cover_charge_enabled'),
     cover_charge_amount: nullableNumber(formData.get('cover_charge_amount')),
     is_advertised: booleanValue(formData, 'is_advertised'),
@@ -127,11 +138,14 @@ function buildRestaurantUpdate(formData: FormData) {
     place_types: arrayFromText(formValue(formData.get('place_types'))),
     country: nullableString(formData.get('country')),
     isapproved: booleanValue(formData, 'isapproved'),
-    ai_summary: nullableString(formData.get('ai_summary'))
+    ai_summary: nullableString(formData.get('ai_summary')),
   };
 
   if (formData.has('cover_image')) {
-    return { ...payload, cover_image: nullableString(formData.get('cover_image')) };
+    return {
+      ...payload,
+      cover_image: nullableString(formData.get('cover_image')),
+    };
   }
 
   return payload;
@@ -139,13 +153,53 @@ function buildRestaurantUpdate(formData: FormData) {
 
 function buildOpeningHourPayload(formData: FormData) {
   const isClosed = booleanValue(formData, 'is_closed');
+  const openTime = nullableString(formData.get('open_time'));
+  const closeTime = nullableString(formData.get('close_time'));
+  const normalizedCloseTime =
+    !isClosed && openTime && !closeTime ? '23:59' : closeTime;
 
   return {
     day_of_week: Number(formValue(formData.get('day_of_week'))),
-    open_time: isClosed ? null : nullableString(formData.get('open_time')),
-    close_time: isClosed ? null : nullableString(formData.get('close_time')),
-    is_closed: isClosed
+    open_time: isClosed ? null : openTime,
+    close_time: isClosed ? null : normalizedCloseTime,
+    is_closed: isClosed,
   };
+}
+
+function buildOpeningHourPayloads(formData: FormData) {
+  const payload = buildOpeningHourPayload(formData);
+  if (payload.day_of_week !== 1) {
+    return [payload];
+  }
+
+  return [0, 1, 2, 3, 4, 5, 6].map((dayOfWeek) => ({
+    ...payload,
+    day_of_week: dayOfWeek,
+  }));
+}
+
+function autofillClosingTime(event: ChangeEvent<HTMLInputElement>) {
+  const form = event.currentTarget.form;
+  if (!form) {
+    return;
+  }
+
+  const openTime = form.elements.namedItem('open_time');
+  const closeTime = form.elements.namedItem('close_time');
+  const isClosed = form.elements.namedItem('is_closed');
+
+  if (
+    !(openTime instanceof HTMLInputElement) ||
+    !(closeTime instanceof HTMLInputElement) ||
+    !(isClosed instanceof HTMLInputElement) ||
+    isClosed.checked ||
+    !event.currentTarget.value ||
+    closeTime.value
+  ) {
+    return;
+  }
+
+  closeTime.value = '23:59';
 }
 
 function buildReviewPayload(formData: FormData) {
@@ -162,7 +216,7 @@ function buildReviewPayload(formData: FormData) {
     source: nullableString(formData.get('source')),
     external_review_id: nullableString(formData.get('external_review_id')),
     liked_tags: arrayFromText(formValue(formData.get('liked_tags'))),
-    photo_urls: arrayFromText(formValue(formData.get('photo_urls')))
+    photo_urls: arrayFromText(formValue(formData.get('photo_urls'))),
   };
 }
 
@@ -176,7 +230,7 @@ const facilityTagOptions = [
   'Valet Parking',
   'Live Music',
   'Wheelchair Accessible',
-  'Bar Available'
+  'Bar Available',
 ];
 
 const moodTagOptions = [
@@ -189,10 +243,13 @@ const moodTagOptions = [
   'Drink & dine',
   'Family dining',
   'Party Vibes',
-  'Romantic dining'
+  'Romantic dining',
 ];
 
-function tagTextFromBundle(tags: RestaurantTag[] | undefined, tagType: RestaurantTagType) {
+function tagTextFromBundle(
+  tags: RestaurantTag[] | undefined,
+  tagType: RestaurantTagType,
+) {
   return (tags ?? [])
     .filter((tag) => tag.tag_type === tagType)
     .sort((left, right) => left.sort_order - right.sort_order)
@@ -209,17 +266,43 @@ function tagLinesFromText(value: string) {
 
 function buildRestaurantTagPayload(formData: FormData) {
   const cuisines = tagLinesFromText(formValue(formData.get('cuisines')));
-  const moods = formData.getAll('mood_tag').map((value) => String(value).trim()).filter(Boolean);
+  const moods = formData
+    .getAll('mood_tag')
+    .map((value) => String(value).trim())
+    .filter(Boolean);
   const highlights = tagLinesFromText(formValue(formData.get('highlights')));
   const worthVisit = tagLinesFromText(formValue(formData.get('worth_visit')));
-  const facilities = formData.getAll('facility').map((value) => String(value).trim()).filter(Boolean);
+  const facilities = formData
+    .getAll('facility')
+    .map((value) => String(value).trim())
+    .filter(Boolean);
 
   return [
-    ...cuisines.map((tag_value, index) => ({ tag_type: 'cuisine' as const, tag_value, sort_order: index })),
-    ...moods.map((tag_value, index) => ({ tag_type: 'mood' as const, tag_value, sort_order: index })),
-    ...facilities.map((tag_value, index) => ({ tag_type: 'facility' as const, tag_value, sort_order: index })),
-    ...highlights.map((tag_value, index) => ({ tag_type: 'highlight' as const, tag_value, sort_order: index })),
-    ...worthVisit.map((tag_value, index) => ({ tag_type: 'worth_visit' as const, tag_value, sort_order: index }))
+    ...cuisines.map((tag_value, index) => ({
+      tag_type: 'cuisine' as const,
+      tag_value,
+      sort_order: index,
+    })),
+    ...moods.map((tag_value, index) => ({
+      tag_type: 'mood' as const,
+      tag_value,
+      sort_order: index,
+    })),
+    ...facilities.map((tag_value, index) => ({
+      tag_type: 'facility' as const,
+      tag_value,
+      sort_order: index,
+    })),
+    ...highlights.map((tag_value, index) => ({
+      tag_type: 'highlight' as const,
+      tag_value,
+      sort_order: index,
+    })),
+    ...worthVisit.map((tag_value, index) => ({
+      tag_type: 'worth_visit' as const,
+      tag_value,
+      sort_order: index,
+    })),
   ];
 }
 
@@ -229,11 +312,16 @@ async function saveRestaurantTagsForForm(
     tag_type: RestaurantTagType;
     tag_value: string;
     sort_order: number;
-  }>
+  }>,
 ) {
   function isPermissionError(error: unknown) {
-    const err = error as { status?: number | string; code?: string; message?: string } | null;
-    const status = typeof err?.status === 'string' ? Number(err.status) : err?.status;
+    const err = error as {
+      status?: number | string;
+      code?: string;
+      message?: string;
+    } | null;
+    const status =
+      typeof err?.status === 'string' ? Number(err.status) : err?.status;
     const message = (err?.message ?? '').toLowerCase();
 
     return (
@@ -248,10 +336,16 @@ async function saveRestaurantTagsForForm(
     );
   }
 
-  const deleteResult = await supabase.from('restaurant_tags').delete().eq('restaurant_id', restaurantId);
+  const deleteResult = await supabase
+    .from('restaurant_tags')
+    .delete()
+    .eq('restaurant_id', restaurantId);
   if (deleteResult.error) {
     if (isPermissionError(deleteResult.error)) {
-      return { warning: 'Restaurant saved, but mood tags could not be updated due to table permissions.' };
+      return {
+        warning:
+          'Restaurant saved, but mood tags could not be updated due to table permissions.',
+      };
     }
 
     throw deleteResult.error;
@@ -262,7 +356,7 @@ async function saveRestaurantTagsForForm(
       restaurant_id: restaurantId,
       tag_type: tag.tag_type,
       tag_value: tag.tag_value.trim(),
-      sort_order: tag.sort_order
+      sort_order: tag.sort_order,
     }))
     .filter((tag) => tag.tag_value.length > 0);
 
@@ -270,10 +364,15 @@ async function saveRestaurantTagsForForm(
     return {};
   }
 
-  const insertResult = await supabase.from('restaurant_tags').insert(normalized);
+  const insertResult = await supabase
+    .from('restaurant_tags')
+    .insert(normalized);
   if (insertResult.error) {
     if (isPermissionError(insertResult.error)) {
-      return { warning: 'Restaurant saved, but mood tags could not be updated due to table permissions.' };
+      return {
+        warning:
+          'Restaurant saved, but mood tags could not be updated due to table permissions.',
+      };
     }
 
     throw insertResult.error;
@@ -291,12 +390,18 @@ export default function RestaurantDetailsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const [savingAction, setSavingAction] = useState<string | null>(null);
-  const [enhancementStatus, setEnhancementStatus] = useState<Record<string, string>>({});
-  const [localMediaPreviews, setLocalMediaPreviews] = useState<LocalMediaPreview[]>([]);
+  const [enhancementStatus, setEnhancementStatus] = useState<
+    Record<string, string>
+  >({});
+  const [localMediaPreviews, setLocalMediaPreviews] = useState<
+    LocalMediaPreview[]
+  >([]);
   const localPreviewUrlsRef = useRef<string[]>([]);
 
   useEffect(() => {
-    localPreviewUrlsRef.current = localMediaPreviews.map((item) => item.previewUrl);
+    localPreviewUrlsRef.current = localMediaPreviews.map(
+      (item) => item.previewUrl,
+    );
   }, [localMediaPreviews]);
 
   useEffect(() => {
@@ -318,7 +423,11 @@ export default function RestaurantDetailsPage() {
       setBundle(data);
       setVersion((current) => current + 1);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Failed to load restaurant bundle');
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : 'Failed to load restaurant bundle',
+      );
     } finally {
       setLoading(false);
     }
@@ -328,12 +437,14 @@ export default function RestaurantDetailsPage() {
     const response = await fetch('/api/sync-opening-hours', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ id: restaurantId })
+      body: JSON.stringify({ id: restaurantId }),
     });
 
-    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    const payload = (await response.json().catch(() => null)) as {
+      error?: string;
+    } | null;
     if (!response.ok) {
       throw new Error(payload?.error ?? 'Failed to sync opening hours');
     }
@@ -357,7 +468,7 @@ export default function RestaurantDetailsPage() {
   if (!restaurantId) {
     return (
       <main>
-        <div className="error-box">Missing restaurant id.</div>
+        <div className='error-box'>Missing restaurant id.</div>
       </main>
     );
   }
@@ -369,9 +480,18 @@ export default function RestaurantDetailsPage() {
     try {
       const result = await approveRestaurant(restaurantId, isapproved);
       await loadBundle();
-      setNotice(result?.message ?? (isapproved ? 'Restaurant approved.' : 'Restaurant marked as pending again.'));
+      setNotice(
+        result?.message ??
+          (isapproved
+            ? 'Restaurant approved.'
+            : 'Restaurant marked as pending again.'),
+      );
     } catch (approveError) {
-      setError(approveError instanceof Error ? approveError.message : 'Failed to update approval state');
+      setError(
+        approveError instanceof Error
+          ? approveError.message
+          : 'Failed to update approval state',
+      );
     } finally {
       setSavingAction(null);
     }
@@ -392,15 +512,31 @@ export default function RestaurantDetailsPage() {
 
       await updateRestaurant(restaurantId, payload);
       await syncRestaurantMirror(restaurantId, payload);
-      const tagSaveResult = await saveRestaurantTagsForForm(restaurantId, buildRestaurantTagPayload(formData));
+      const tagSaveResult = await saveRestaurantTagsForForm(
+        restaurantId,
+        buildRestaurantTagPayload(formData),
+      );
       await republishIfApproved();
       await loadBundle();
       setNotice(tagSaveResult.warning ?? 'Restaurant details saved.');
     } catch (saveError) {
-      if (saveError && typeof saveError === 'object' && 'message' in saveError) {
-        setError(String((saveError as { message?: string }).message ?? 'Failed to save restaurant'));
+      if (
+        saveError &&
+        typeof saveError === 'object' &&
+        'message' in saveError
+      ) {
+        setError(
+          String(
+            (saveError as { message?: string }).message ??
+              'Failed to save restaurant',
+          ),
+        );
       } else {
-        setError(saveError instanceof Error ? saveError.message : 'Failed to save restaurant');
+        setError(
+          saveError instanceof Error
+            ? saveError.message
+            : 'Failed to save restaurant',
+        );
       }
     } finally {
       setSavingAction(null);
@@ -418,29 +554,47 @@ export default function RestaurantDetailsPage() {
       await loadBundle();
       setNotice('Cover image updated.');
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Failed to update cover image');
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : 'Failed to update cover image',
+      );
     } finally {
       setSavingAction(null);
     }
   }
 
-  async function handleOpeningHourSave(event: FormEvent<HTMLFormElement>, id: string) {
+  async function handleOpeningHourSave(
+    event: FormEvent<HTMLFormElement>,
+    id: string,
+  ) {
     event.preventDefault();
     setSavingAction(`opening-${id}`);
     setNotice(null);
 
     try {
-      await saveOpeningHour(id, buildOpeningHourPayload(new FormData(event.currentTarget)));
+      await saveOpeningHour(
+        id,
+        buildOpeningHourPayload(new FormData(event.currentTarget)),
+      );
       await loadBundle();
       try {
         await syncOpeningHours();
       } catch (syncError) {
-        setNotice(syncError instanceof Error ? `Saved locally, but mirror sync failed: ${syncError.message}` : 'Saved locally, but mirror sync failed.');
+        setNotice(
+          syncError instanceof Error
+            ? `Saved locally, but mirror sync failed: ${syncError.message}`
+            : 'Saved locally, but mirror sync failed.',
+        );
         return;
       }
       setNotice('Opening hours updated.');
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Failed to save opening hours');
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : 'Failed to save opening hours',
+      );
     } finally {
       setSavingAction(null);
     }
@@ -453,18 +607,29 @@ export default function RestaurantDetailsPage() {
 
     try {
       const formElement = event.currentTarget;
-      await createOpeningHour(restaurantId, buildOpeningHourPayload(new FormData(formElement)));
+      const payloads = buildOpeningHourPayloads(new FormData(formElement));
+      for (const payload of payloads) {
+        await createOpeningHour(restaurantId, payload);
+      }
       formElement.reset();
       await loadBundle();
       try {
         await syncOpeningHours();
       } catch (syncError) {
-        setNotice(syncError instanceof Error ? `Saved locally, but mirror sync failed: ${syncError.message}` : 'Saved locally, but mirror sync failed.');
+        setNotice(
+          syncError instanceof Error
+            ? `Saved locally, but mirror sync failed: ${syncError.message}`
+            : 'Saved locally, but mirror sync failed.',
+        );
         return;
       }
       setNotice('New opening hour row added.');
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Failed to add opening hour');
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : 'Failed to add opening hour',
+      );
     } finally {
       setSavingAction(null);
     }
@@ -484,12 +649,20 @@ export default function RestaurantDetailsPage() {
       try {
         await syncOpeningHours();
       } catch (syncError) {
-        setNotice(syncError instanceof Error ? `Deleted locally, but mirror sync failed: ${syncError.message}` : 'Deleted locally, but mirror sync failed.');
+        setNotice(
+          syncError instanceof Error
+            ? `Deleted locally, but mirror sync failed: ${syncError.message}`
+            : 'Deleted locally, but mirror sync failed.',
+        );
         return;
       }
       setNotice('Opening hour row deleted.');
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : 'Failed to delete opening hour');
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : 'Failed to delete opening hour',
+      );
     } finally {
       setSavingAction(null);
     }
@@ -508,29 +681,46 @@ export default function RestaurantDetailsPage() {
       await loadBundle();
       setNotice('Media asset deleted.');
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : 'Failed to delete media asset');
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : 'Failed to delete media asset',
+      );
     } finally {
       setSavingAction(null);
     }
   }
 
-  async function handleReviewSave(event: FormEvent<HTMLFormElement>, id: string) {
+  async function handleReviewSave(
+    event: FormEvent<HTMLFormElement>,
+    id: string,
+  ) {
     event.preventDefault();
     setSavingAction(`review-${id}`);
     setNotice(null);
 
     try {
-      await saveReview(id, buildReviewPayload(new FormData(event.currentTarget)));
+      await saveReview(
+        id,
+        buildReviewPayload(new FormData(event.currentTarget)),
+      );
       await loadBundle();
       setNotice('Review updated.');
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Failed to save review');
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : 'Failed to save review',
+      );
     } finally {
       setSavingAction(null);
     }
   }
 
-  async function handleEnhanceImage(assetId: string, imageUrl: string | null | undefined) {
+  async function handleEnhanceImage(
+    assetId: string,
+    imageUrl: string | null | undefined,
+  ) {
     if (!imageUrl) {
       setNotice('No image URL available to enhance.');
       return;
@@ -543,13 +733,17 @@ export default function RestaurantDetailsPage() {
       const res = await fetch('/api/enhance-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assetId, url: imageUrl, restaurantId })
+        body: JSON.stringify({ assetId, url: imageUrl, restaurantId }),
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Failed to queue enhancement');
+      if (!res.ok)
+        throw new Error(data?.error || 'Failed to queue enhancement');
 
-      setEnhancementStatus((s) => ({ ...s, [assetId]: data.status || 'queued' }));
+      setEnhancementStatus((s) => ({
+        ...s,
+        [assetId]: data.status || 'queued',
+      }));
       setNotice('Image enhancement queued.');
     } catch (e) {
       setEnhancementStatus((s) => ({ ...s, [assetId]: 'error' }));
@@ -584,7 +778,7 @@ export default function RestaurantDetailsPage() {
         storage_path: asset.storage_path,
         mime_type: asset.mime_type,
         is_active: asset.is_active,
-        sort_order: asset.sort_order
+        sort_order: asset.sort_order,
       });
 
       await loadBundle();
@@ -596,7 +790,10 @@ export default function RestaurantDetailsPage() {
     }
   }
 
-  function mediaUrl(asset: { storage_public_url: string | null; file_url: string }) {
+  function mediaUrl(asset: {
+    storage_public_url: string | null;
+    file_url: string;
+  }) {
     return asset.storage_public_url || asset.file_url;
   }
 
@@ -616,7 +813,7 @@ export default function RestaurantDetailsPage() {
         assetType,
         previewUrl: URL.createObjectURL(file),
         fileName: file.name,
-        file
+        file,
       });
     });
 
@@ -651,23 +848,31 @@ export default function RestaurantDetailsPage() {
       const baseSort = (bundle?.mediaAssets.length ?? 0) + 1;
       const DEFAULT_BUCKET = 'gmap-scrapper-media-prod';
       const existingBuckets = Array.from(
-        new Set((bundle?.mediaAssets ?? []).map((asset) => asset.storage_bucket).filter(Boolean))
+        new Set(
+          (bundle?.mediaAssets ?? [])
+            .map((asset) => asset.storage_bucket)
+            .filter(Boolean),
+        ),
       ) as string[];
       const candidateBuckets = Array.from(
-        new Set([
-          ...existingBuckets,
-          process.env.NEXT_PUBLIC_SUPABASE_MEDIA_BUCKET,
-          DEFAULT_BUCKET,
-          'restaurant-media',
-          'restaurant_media',
-          'media-assets',
-          'media',
-          'uploads'
-        ].filter(Boolean))
+        new Set(
+          [
+            ...existingBuckets,
+            process.env.NEXT_PUBLIC_SUPABASE_MEDIA_BUCKET,
+            DEFAULT_BUCKET,
+            'restaurant-media',
+            'restaurant_media',
+            'media-assets',
+            'media',
+            'uploads',
+          ].filter(Boolean),
+        ),
       ) as string[];
 
       if (candidateBuckets.length === 0) {
-        throw new Error('No storage bucket configured. Set NEXT_PUBLIC_SUPABASE_MEDIA_BUCKET in .env.');
+        throw new Error(
+          'No storage bucket configured. Set NEXT_PUBLIC_SUPABASE_MEDIA_BUCKET in .env.',
+        );
       }
 
       let resolvedBucket: string | null = null;
@@ -675,7 +880,9 @@ export default function RestaurantDetailsPage() {
       async function bucketExists(bucketName: string) {
         try {
           // try listing the root to detect bucket existence
-          const { error } = await supabase.storage.from(bucketName).list('', { limit: 1 });
+          const { error } = await supabase.storage
+            .from(bucketName)
+            .list('', { limit: 1 });
           if (error) {
             return !isBucketNotFoundError(error.message);
           }
@@ -699,20 +906,25 @@ export default function RestaurantDetailsPage() {
           const res = await fetch('/api/create-bucket', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ bucket: DEFAULT_BUCKET })
+            body: JSON.stringify({ bucket: DEFAULT_BUCKET }),
           });
 
           const payload = await res.json().catch(() => null);
-          if (res.ok && (payload?.status === 'created' || payload?.status === 'exists')) {
+          if (
+            res.ok &&
+            (payload?.status === 'created' || payload?.status === 'exists')
+          ) {
             availableBuckets.push(DEFAULT_BUCKET);
           } else {
-            throw new Error(payload?.error || 'Failed to create default bucket');
+            throw new Error(
+              payload?.error || 'Failed to create default bucket',
+            );
           }
         } catch (e) {
           throw new Error(
             e instanceof Error
               ? `No available storage buckets and failed to create default bucket: ${e.message}`
-              : 'No available storage buckets'
+              : 'No available storage buckets',
           );
         }
       }
@@ -723,14 +935,18 @@ export default function RestaurantDetailsPage() {
         let storagePath = '';
         let uploadErrorMessage = '';
 
-        const tryBuckets: string[] = uploadBucket ? [uploadBucket] : availableBuckets;
+        const tryBuckets: string[] = uploadBucket
+          ? [uploadBucket]
+          : availableBuckets;
 
         for (const bucket of tryBuckets) {
           storagePath = `${restaurantId}/${preview.assetType}/${Date.now()}-${index}-${sanitizeFileName(preview.fileName)}`;
-          const { error: uploadError } = await supabase.storage.from(bucket).upload(storagePath, preview.file, {
-            upsert: false,
-            contentType: preview.file.type || undefined
-          });
+          const { error: uploadError } = await supabase.storage
+            .from(bucket)
+            .upload(storagePath, preview.file, {
+              upsert: false,
+              contentType: preview.file.type || undefined,
+            });
 
           if (!uploadError) {
             uploadBucket = bucket;
@@ -746,10 +962,14 @@ export default function RestaurantDetailsPage() {
         }
 
         if (!uploadBucket || uploadErrorMessage) {
-          throw new Error(`Upload failed for ${preview.fileName}: ${uploadErrorMessage || 'unknown upload error'}`);
+          throw new Error(
+            `Upload failed for ${preview.fileName}: ${uploadErrorMessage || 'unknown upload error'}`,
+          );
         }
 
-        const { data: publicData } = supabase.storage.from(uploadBucket).getPublicUrl(storagePath);
+        const { data: publicData } = supabase.storage
+          .from(uploadBucket)
+          .getPublicUrl(storagePath);
         const publicUrl = publicData.publicUrl;
 
         await createMediaAsset(restaurantId, {
@@ -761,7 +981,7 @@ export default function RestaurantDetailsPage() {
           mime_type: preview.file.type || null,
           storage_bucket: uploadBucket,
           storage_path: storagePath,
-          storage_public_url: publicUrl
+          storage_public_url: publicUrl,
         });
 
         URL.revokeObjectURL(preview.previewUrl);
@@ -769,12 +989,14 @@ export default function RestaurantDetailsPage() {
 
       setLocalMediaPreviews([]);
       await loadBundle();
-      setNotice(`Image changes saved.${resolvedBucket ? ` Uploaded to bucket: ${resolvedBucket}.` : ''}`);
+      setNotice(
+        `Image changes saved.${resolvedBucket ? ` Uploaded to bucket: ${resolvedBucket}.` : ''}`,
+      );
     } catch (saveError) {
       setError(
         saveError instanceof Error
           ? saveError.message
-          : 'Failed to save images. Check storage bucket and insert permissions.'
+          : 'Failed to save images. Check storage bucket and insert permissions.',
       );
     } finally {
       setSavingAction(null);
@@ -785,211 +1007,429 @@ export default function RestaurantDetailsPage() {
 
   return (
     <main>
-      <div className="shell">
-        <section className="hero">
-          <span className="kicker">Restaurant detail</span>
+      <div className='shell'>
+        <section className='hero'>
+          <span className='kicker'>Restaurant detail</span>
           <h1>{restaurant?.name ?? 'Loading restaurant...'}</h1>
           <p>
-            Edit the restaurant record, opening hours, media assets, and reviews from one screen. Approval changes are
-            saved back to the same <strong>restaurants</strong> row.
+            Edit the restaurant record, opening hours, media assets, and reviews
+            from one screen. Approval changes are saved back to the same{' '}
+            <strong>restaurants</strong> row.
           </p>
 
-          <div className="topbar">
-            <div className="search-row">
-              <Link href="/" className="button-ghost">
+          <div className='topbar'>
+            <div className='search-row'>
+              <Link
+                href='/'
+                className='button-ghost'
+              >
                 Back to dashboard
               </Link>
-              <button className="toggle" type="button" onClick={() => void loadBundle()}>
+              <button
+                className='toggle'
+                type='button'
+                onClick={() => void loadBundle()}
+              >
                 Reload data
               </button>
             </div>
-            <div className="search-row">
-              <span className={`status ${restaurant?.isapproved === true ? 'status-approved' : 'status-pending'}`}>
-                {restaurant?.isapproved === true ? 'Approved' : 'Pending approval'}
+            <div className='search-row'>
+              <span
+                className={`status ${restaurant?.isapproved === true ? 'status-approved' : 'status-pending'}`}
+              >
+                {restaurant?.isapproved === true
+                  ? 'Approved'
+                  : 'Pending approval'}
               </span>
-              <span className="count-pill">{bundle?.openingHours.length ?? 0} opening rows</span>
-              <span className="count-pill">{bundle?.mediaAssets.length ?? 0} media assets</span>
-              <span className="count-pill">{bundle?.reviews.length ?? 0} reviews</span>
+              <span className='count-pill'>
+                {bundle?.openingHours.length ?? 0} opening rows
+              </span>
+              <span className='count-pill'>
+                {bundle?.mediaAssets.length ?? 0} media assets
+              </span>
+              <span className='count-pill'>
+                {bundle?.reviews.length ?? 0} reviews
+              </span>
             </div>
           </div>
         </section>
 
-        {loading ? <div className="helper-box">Loading restaurant bundle...</div> : null}
-        {error ? <div className="error-box">{error}</div> : null}
-        {notice ? <div className="success-box">{notice}</div> : null}
+        {loading ? (
+          <div className='helper-box'>Loading restaurant bundle...</div>
+        ) : null}
+        {error ? <div className='error-box'>{error}</div> : null}
+        {notice ? <div className='success-box'>{notice}</div> : null}
 
         {restaurant ? (
-          <div className="section">
-            <section className="detail-card">
-              <div className="section-head">
+          <div className='section'>
+            <section className='detail-card'>
+              <div className='section-head'>
                 <div>
-                  <span className="kicker">Restaurant record</span>
+                  <span className='kicker'>Restaurant record</span>
                   <h2>Core details</h2>
-                  <p>Everything below writes back to the main restaurants table.</p>
+                  <p>
+                    Everything below writes back to the main restaurants table.
+                  </p>
                 </div>
-                <div className="search-row">
+                <div className='search-row'>
                   <button
-                    className="button"
-                    type="button"
+                    className='button'
+                    type='button'
                     onClick={() => void handleApproveChange(true)}
-                    disabled={restaurant.isapproved === true || savingAction === 'approve'}
+                    disabled={
+                      restaurant.isapproved === true ||
+                      savingAction === 'approve'
+                    }
                   >
-                    {savingAction === 'approve' ? 'Saving...' : restaurant.isapproved === true ? 'Approved' : 'Approve'}
+                    {savingAction === 'approve'
+                      ? 'Saving...'
+                      : restaurant.isapproved === true
+                        ? 'Approved'
+                        : 'Approve'}
                   </button>
                   <button
-                    className="button-ghost"
-                    type="button"
+                    className='button-ghost'
+                    type='button'
                     onClick={() => void handleApproveChange(false)}
-                    disabled={restaurant.isapproved === false || savingAction === 'approve'}
+                    disabled={
+                      restaurant.isapproved === false ||
+                      savingAction === 'approve'
+                    }
                   >
                     Mark pending
                   </button>
                 </div>
               </div>
 
-              <form key={version} className="section" onSubmit={handleRestaurantSave}>
-                <div className="form-grid">
-                  <div className="field">
-                    <label htmlFor="name">Name</label>
-                    <input id="name" name="name" type="text" defaultValue={restaurant.name} required />
+              <form
+                key={version}
+                className='section'
+                onSubmit={handleRestaurantSave}
+              >
+                <div className='form-grid'>
+                  <div className='field'>
+                    <label htmlFor='name'>Name</label>
+                    <input
+                      id='name'
+                      name='name'
+                      type='text'
+                      defaultValue={restaurant.name}
+                      required
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="slug">Slug</label>
-                    <input id="slug" name="slug" type="text" defaultValue={formValue(restaurant.slug)} disabled title="Auto-generated from name" />
+                  <div className='field'>
+                    <label htmlFor='slug'>Slug</label>
+                    <input
+                      id='slug'
+                      name='slug'
+                      type='text'
+                      defaultValue={formValue(restaurant.slug)}
+                      disabled
+                      title='Auto-generated from name'
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="phone">Phone</label>
-                    <input id="phone" name="phone" type="text" defaultValue={formValue(restaurant.phone)} />
+                  <div className='field'>
+                    <label htmlFor='phone'>Phone</label>
+                    <input
+                      id='phone'
+                      name='phone'
+                      type='text'
+                      defaultValue={formValue(restaurant.phone)}
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="country">Country</label>
-                    <input id="country" name="country" type="text" defaultValue={formValue(restaurant.country)} />
+                  <div className='field'>
+                    <label htmlFor='country'>Country</label>
+                    <input
+                      id='country'
+                      name='country'
+                      type='text'
+                      defaultValue={formValue(restaurant.country)}
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="area">Area</label>
-                    <input id="area" name="area" type="text" defaultValue={formValue(restaurant.area)} />
+                  <div className='field'>
+                    <label htmlFor='area'>Area</label>
+                    <input
+                      id='area'
+                      name='area'
+                      type='text'
+                      defaultValue={formValue(restaurant.area)}
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="city">City</label>
-                    <input id="city" name="city" type="text" defaultValue={formValue(restaurant.city)} />
+                  <div className='field'>
+                    <label htmlFor='city'>City</label>
+                    <input
+                      id='city'
+                      name='city'
+                      type='text'
+                      defaultValue={formValue(restaurant.city)}
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="full_address">Full address</label>
-                    <textarea id="full_address" name="full_address" defaultValue={formValue(restaurant.full_address)} />
+                  <div className='field'>
+                    <label htmlFor='full_address'>Full address</label>
+                    <textarea
+                      id='full_address'
+                      name='full_address'
+                      defaultValue={formValue(restaurant.full_address)}
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="latitude">Latitude</label>
-                    <input id="latitude" name="latitude" type="number" step="any" defaultValue={formValue(restaurant.latitude)} />
+                  <div className='field'>
+                    <label htmlFor='latitude'>Latitude</label>
+                    <input
+                      id='latitude'
+                      name='latitude'
+                      type='number'
+                      step='any'
+                      defaultValue={formValue(restaurant.latitude)}
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="longitude">Longitude</label>
-                    <input id="longitude" name="longitude" type="number" step="any" defaultValue={formValue(restaurant.longitude)} />
+                  <div className='field'>
+                    <label htmlFor='longitude'>Longitude</label>
+                    <input
+                      id='longitude'
+                      name='longitude'
+                      type='number'
+                      step='any'
+                      defaultValue={formValue(restaurant.longitude)}
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="cost_for_two">Cost for two</label>
-                    <input id="cost_for_two" name="cost_for_two" type="number" step="1" defaultValue={formValue(restaurant.cost_for_two)} />
+                  <div className='field'>
+                    <label htmlFor='cost_for_two'>Cost for two</label>
+                    <input
+                      id='cost_for_two'
+                      name='cost_for_two'
+                      type='number'
+                      step='1'
+                      defaultValue={formValue(restaurant.cost_for_two)}
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="avg_duration_minutes">Average duration minutes</label>
-                    <input id="avg_duration_minutes" name="avg_duration_minutes" type="number" step="1" defaultValue={formValue(restaurant.avg_duration_minutes)} />
+                  <div className='field'>
+                    <label htmlFor='avg_duration_minutes'>
+                      Average duration minutes
+                    </label>
+                    <input
+                      id='avg_duration_minutes'
+                      name='avg_duration_minutes'
+                      type='number'
+                      step='1'
+                      defaultValue={formValue(restaurant.avg_duration_minutes)}
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="max_bookings_per_slot">Max bookings per slot</label>
-                    <input id="max_bookings_per_slot" name="max_bookings_per_slot" type="number" step="1" defaultValue={formValue(restaurant.max_bookings_per_slot)} />
+                  <div className='field'>
+                    <label htmlFor='max_bookings_per_slot'>
+                      Max bookings per slot
+                    </label>
+                    <input
+                      id='max_bookings_per_slot'
+                      name='max_bookings_per_slot'
+                      type='number'
+                      step='1'
+                      defaultValue={formValue(restaurant.max_bookings_per_slot)}
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="advance_booking_days">Advance booking days</label>
-                    <input id="advance_booking_days" name="advance_booking_days" type="number" step="1" defaultValue={formValue(restaurant.advance_booking_days)} />
+                  <div className='field'>
+                    <label htmlFor='advance_booking_days'>
+                      Advance booking days
+                    </label>
+                    <input
+                      id='advance_booking_days'
+                      name='advance_booking_days'
+                      type='number'
+                      step='1'
+                      defaultValue={formValue(restaurant.advance_booking_days)}
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="modification_cutoff_minutes">Modification cutoff minutes</label>
-                    <input id="modification_cutoff_minutes" name="modification_cutoff_minutes" type="number" step="1" defaultValue={formValue(restaurant.modification_cutoff_minutes)} />
+                  <div className='field'>
+                    <label htmlFor='modification_cutoff_minutes'>
+                      Modification cutoff minutes
+                    </label>
+                    <input
+                      id='modification_cutoff_minutes'
+                      name='modification_cutoff_minutes'
+                      type='number'
+                      step='1'
+                      defaultValue={formValue(
+                        restaurant.modification_cutoff_minutes,
+                      )}
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="cancellation_cutoff_minutes">Cancellation cutoff minutes</label>
-                    <input id="cancellation_cutoff_minutes" name="cancellation_cutoff_minutes" type="number" step="1" defaultValue={formValue(restaurant.cancellation_cutoff_minutes)} />
+                  <div className='field'>
+                    <label htmlFor='cancellation_cutoff_minutes'>
+                      Cancellation cutoff minutes
+                    </label>
+                    <input
+                      id='cancellation_cutoff_minutes'
+                      name='cancellation_cutoff_minutes'
+                      type='number'
+                      step='1'
+                      defaultValue={formValue(
+                        restaurant.cancellation_cutoff_minutes,
+                      )}
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="cover_charge_amount">Cover charge amount</label>
-                    <input id="cover_charge_amount" name="cover_charge_amount" type="number" step="any" defaultValue={formValue(restaurant.cover_charge_amount)} />
+                  <div className='field'>
+                    <label htmlFor='cover_charge_amount'>
+                      Cover charge amount
+                    </label>
+                    <input
+                      id='cover_charge_amount'
+                      name='cover_charge_amount'
+                      type='number'
+                      step='any'
+                      defaultValue={formValue(restaurant.cover_charge_amount)}
+                    />
                   </div>
-                  
-                  <div className="field">
-                    <label htmlFor="google_place_id">Google place id</label>
-                    <input id="google_place_id" name="google_place_id" type="text" defaultValue={formValue(restaurant.google_place_id)} />
+
+                  <div className='field'>
+                    <label htmlFor='google_place_id'>Google place id</label>
+                    <input
+                      id='google_place_id'
+                      name='google_place_id'
+                      type='text'
+                      defaultValue={formValue(restaurant.google_place_id)}
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="source">Source</label>
-                    <input id="source" name="source" type="text" defaultValue={formValue(restaurant.source)} />
+                  <div className='field'>
+                    <label htmlFor='source'>Source</label>
+                    <input
+                      id='source'
+                      name='source'
+                      type='text'
+                      defaultValue={formValue(restaurant.source)}
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="rating">Rating</label>
-                    <input id="rating" name="rating" type="number" step="any" defaultValue={formValue(restaurant.rating)} />
+                  <div className='field'>
+                    <label htmlFor='rating'>Rating</label>
+                    <input
+                      id='rating'
+                      name='rating'
+                      type='number'
+                      step='any'
+                      defaultValue={formValue(restaurant.rating)}
+                    />
                   </div>
-                  <div className="field">
-                    <label htmlFor="user_ratings_total">User ratings total</label>
-                    <input id="user_ratings_total" name="user_ratings_total" type="number" step="1" defaultValue={formValue(restaurant.user_ratings_total)} />
+                  <div className='field'>
+                    <label htmlFor='user_ratings_total'>
+                      User ratings total
+                    </label>
+                    <input
+                      id='user_ratings_total'
+                      name='user_ratings_total'
+                      type='number'
+                      step='1'
+                      defaultValue={formValue(restaurant.user_ratings_total)}
+                    />
                   </div>
                 </div>
 
-               
-
-                <div className="field">
-                  <label htmlFor="ai_summary">AI Description</label>
-                  <textarea id="ai_summary" name="ai_summary" defaultValue={formValue(restaurant.ai_summary)} />
-                </div>
-
-                <div className="field">
-                  <label>Cover image</label>
-                  <div className="helper">
-                    Select from provided images in the Media Assets section using the "Set as cover" button.
-                  </div>
-                  {restaurant.cover_image ? (
-                    <img src={restaurant.cover_image} alt="Current cover" className="media-preview-image" style={{ maxWidth: 280, marginTop: 10 }} />
-                  ) : (
-                    <div className="helper-box">No cover image selected yet.</div>
-                  )}
-                </div>
-
-                <div className="field">
-                  <label htmlFor="booking_terms">Booking terms</label>
-                  <textarea id="booking_terms" name="booking_terms" defaultValue={textFromArray(restaurant.booking_terms)} />
-                </div>
-
-                <div className="field">
-                  <label htmlFor="cuisines">Cuisines</label>
+                <div className='field'>
+                  <label htmlFor='ai_summary'>AI Description</label>
                   <textarea
-                    id="cuisines"
-                    name="cuisines"
-                    defaultValue={tagTextFromBundle(bundle?.tags, 'cuisine')}
-                    placeholder="Seafood, Grill, International"
+                    id='ai_summary'
+                    name='ai_summary'
+                    defaultValue={formValue(restaurant.ai_summary)}
                   />
                 </div>
 
-                <div className="field">
-                  <label htmlFor="mood_tags">Mood tags</label>
-                  <div className="helper" style={{ marginBottom: 8 }}>
+                <div className='field'>
+                  <label>Cover image</label>
+                  <div className='helper'>
+                    Select from provided images in the Media Assets section
+                    using the "Set as cover" button.
+                  </div>
+                  {restaurant.cover_image ? (
+                    <img
+                      src={restaurant.cover_image}
+                      alt='Current cover'
+                      className='media-preview-image'
+                      style={{ maxWidth: 280, marginTop: 10 }}
+                    />
+                  ) : (
+                    <div className='helper-box'>
+                      No cover image selected yet.
+                    </div>
+                  )}
+                </div>
+
+                <div className='field'>
+                  <label htmlFor='booking_terms'>Booking terms</label>
+                  <textarea
+                    id='booking_terms'
+                    name='booking_terms'
+                    defaultValue={textFromArray(restaurant.booking_terms)}
+                  />
+                </div>
+
+                <div className='field'>
+                  <label htmlFor='cuisines'>Cuisines</label>
+                  <textarea
+                    id='cuisines'
+                    name='cuisines'
+                    defaultValue={tagTextFromBundle(bundle?.tags, 'cuisine')}
+                    placeholder='Seafood, Grill, International'
+                  />
+                </div>
+
+                <div className='field'>
+                  <label htmlFor='mood_tags'>Mood tags</label>
+                  <div
+                    className='helper'
+                    style={{ marginBottom: 8 }}
+                  >
                     Select one or more mood tags from the list below.
                   </div>
-                  <details open style={{ background: 'rgba(255,255,255,0.65)', border: '1px solid rgba(30,41,59,0.12)', borderRadius: 12, padding: 12 }}>
-                    <summary style={{ cursor: 'pointer', fontWeight: 700, marginBottom: 12 }}>
+                  <details
+                    open
+                    style={{
+                      background: 'rgba(255,255,255,0.65)',
+                      border: '1px solid rgba(30,41,59,0.12)',
+                      borderRadius: 12,
+                      padding: 12,
+                    }}
+                  >
+                    <summary
+                      style={{
+                        cursor: 'pointer',
+                        fontWeight: 700,
+                        marginBottom: 12,
+                      }}
+                    >
                       {(() => {
                         const selectedMoodTags = (bundle?.tags ?? [])
                           .filter((tag) => tag.tag_type === 'mood')
                           .map((tag) => tag.tag_value);
 
-                        return selectedMoodTags.length ? `${selectedMoodTags.length} mood tags selected` : 'Select mood tags';
+                        return selectedMoodTags.length
+                          ? `${selectedMoodTags.length} mood tags selected`
+                          : 'Select mood tags';
                       })()}
                     </summary>
-                    <div className="switch-row" style={{ alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+                    <div
+                      className='switch-row'
+                      style={{
+                        alignItems: 'flex-start',
+                        flexWrap: 'wrap',
+                        gap: 12,
+                      }}
+                    >
                       {moodTagOptions.map((option) => {
                         const checked = (bundle?.tags ?? []).some(
-                          (tag) => tag.tag_type === 'mood' && tag.tag_value === option
+                          (tag) =>
+                            tag.tag_type === 'mood' && tag.tag_value === option,
                         );
 
                         return (
-                          <label key={option} className="check" style={{ minWidth: 180 }}>
-                            <input name="mood_tag" type="checkbox" value={option} defaultChecked={checked} /> {option}
+                          <label
+                            key={option}
+                            className='check'
+                            style={{ minWidth: 180 }}
+                          >
+                            <input
+                              name='mood_tag'
+                              type='checkbox'
+                              value={option}
+                              defaultChecked={checked}
+                            />{' '}
+                            {option}
                           </label>
                         );
                       })}
@@ -997,214 +1437,420 @@ export default function RestaurantDetailsPage() {
                   </details>
                 </div>
 
-                <div className="field">
+                <div className='field'>
                   <label>Facilities</label>
-                  <div className="switch-row" style={{ alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+                  <div
+                    className='switch-row'
+                    style={{
+                      alignItems: 'flex-start',
+                      flexWrap: 'wrap',
+                      gap: 12,
+                    }}
+                  >
                     {facilityTagOptions.map((option) => {
                       const checked = (bundle?.tags ?? []).some(
-                        (tag) => tag.tag_type === 'facility' && tag.tag_value === option
+                        (tag) =>
+                          tag.tag_type === 'facility' &&
+                          tag.tag_value === option,
                       );
 
                       return (
-                        <label key={option} className="check" style={{ minWidth: 160 }}>
-                          <input name="facility" type="checkbox" value={option} defaultChecked={checked} /> {option}
+                        <label
+                          key={option}
+                          className='check'
+                          style={{ minWidth: 160 }}
+                        >
+                          <input
+                            name='facility'
+                            type='checkbox'
+                            value={option}
+                            defaultChecked={checked}
+                          />{' '}
+                          {option}
                         </label>
                       );
                     })}
                   </div>
                 </div>
 
-                <div className="field">
-                  <label htmlFor="highlights">Highlights</label>
+                <div className='field'>
+                  <label htmlFor='highlights'>Highlights</label>
                   <textarea
-                    id="highlights"
-                    name="highlights"
+                    id='highlights'
+                    name='highlights'
                     defaultValue={tagTextFromBundle(bundle?.tags, 'highlight')}
-                    placeholder="Fresh seafood platters\nElegant coastal interiors\nSignature oyster specials"
+                    placeholder='Fresh seafood platters\nElegant coastal interiors\nSignature oyster specials'
                   />
                 </div>
 
-                <div className="field">
-                  <label htmlFor="worth_visit">Worth visit</label>
+                <div className='field'>
+                  <label htmlFor='worth_visit'>Worth visit</label>
                   <textarea
-                    id="worth_visit"
-                    name="worth_visit"
-                    defaultValue={tagTextFromBundle(bundle?.tags, 'worth_visit')}
-                    placeholder="Premium seafood experience\nRelaxed bayfront atmosphere\nExcellent ocean-inspired menu"
+                    id='worth_visit'
+                    name='worth_visit'
+                    defaultValue={tagTextFromBundle(
+                      bundle?.tags,
+                      'worth_visit',
+                    )}
+                    placeholder='Premium seafood experience\nRelaxed bayfront atmosphere\nExcellent ocean-inspired menu'
                   />
                 </div>
 
-                <div className="field">
-                  <label htmlFor="place_types">Place types</label>
-                  <textarea id="place_types" name="place_types" defaultValue={textFromArray(restaurant.place_types)} />
+                <div className='field'>
+                  <label htmlFor='place_types'>Place types</label>
+                  <textarea
+                    id='place_types'
+                    name='place_types'
+                    defaultValue={textFromArray(restaurant.place_types)}
+                  />
                 </div>
 
-             
-                <div className="field">
-                  <label htmlFor="source_payload">Source payload JSON</label>
-                  <textarea id="source_payload" name="source_payload" defaultValue={jsonText(restaurant.source_payload)} />
+                <div className='field'>
+                  <label htmlFor='source_payload'>Source payload JSON</label>
+                  <textarea
+                    id='source_payload'
+                    name='source_payload'
+                    defaultValue={jsonText(restaurant.source_payload)}
+                  />
                 </div>
 
-                <div className="switch-row">
-                  <label className="check"><input name="is_active" type="checkbox" defaultChecked={restaurant.is_active} /> Active</label>
-                  <label className="check"><input name="is_pure_veg" type="checkbox" defaultChecked={restaurant.is_pure_veg} /> Pure veg</label>
-                  <label className="check"><input name="booking_enabled" type="checkbox" defaultChecked={restaurant.booking_enabled} /> Booking enabled</label>
-                  <label className="check"><input name="modification_available" type="checkbox" defaultChecked={restaurant.modification_available} /> Modification available</label>
-                  <label className="check"><input name="cancellation_available" type="checkbox" defaultChecked={restaurant.cancellation_available} /> Cancellation available</label>
-                  <label className="check"><input name="cover_charge_enabled" type="checkbox" defaultChecked={restaurant.cover_charge_enabled} /> Cover charge enabled</label>
-                  <label className="check"><input name="is_advertised" type="checkbox" defaultChecked={restaurant.is_advertised} /> Advertised</label>
-                  <label className="check"><input name="isapproved" type="checkbox" defaultChecked={restaurant.isapproved === true} /> Approved</label>
+                <div className='switch-row'>
+                  <label className='check'>
+                    <input
+                      name='is_active'
+                      type='checkbox'
+                      defaultChecked={restaurant.is_active}
+                    />{' '}
+                    Active
+                  </label>
+                  <label className='check'>
+                    <input
+                      name='is_pure_veg'
+                      type='checkbox'
+                      defaultChecked={restaurant.is_pure_veg}
+                    />{' '}
+                    Pure veg
+                  </label>
+                  <label className='check'>
+                    <input
+                      name='booking_enabled'
+                      type='checkbox'
+                      defaultChecked={restaurant.booking_enabled}
+                    />{' '}
+                    Booking enabled
+                  </label>
+                  <label className='check'>
+                    <input
+                      name='modification_available'
+                      type='checkbox'
+                      defaultChecked={restaurant.modification_available}
+                    />{' '}
+                    Modification available
+                  </label>
+                  <label className='check'>
+                    <input
+                      name='cancellation_available'
+                      type='checkbox'
+                      defaultChecked={restaurant.cancellation_available}
+                    />{' '}
+                    Cancellation available
+                  </label>
+                  <label className='check'>
+                    <input
+                      name='cover_charge_enabled'
+                      type='checkbox'
+                      defaultChecked={restaurant.cover_charge_enabled}
+                    />{' '}
+                    Cover charge enabled
+                  </label>
+                  <label className='check'>
+                    <input
+                      name='is_advertised'
+                      type='checkbox'
+                      defaultChecked={restaurant.is_advertised}
+                    />{' '}
+                    Advertised
+                  </label>
+                  <label className='check'>
+                    <input
+                      name='isapproved'
+                      type='checkbox'
+                      defaultChecked={restaurant.isapproved === true}
+                    />{' '}
+                    Approved
+                  </label>
                 </div>
 
-                <div className="toolbar">
-                  <div className="helper">Updated at {restaurant.updated_at}</div>
-                  <button className="button" type="submit" disabled={savingAction === 'restaurant'}>
-                    {savingAction === 'restaurant' ? 'Saving restaurant...' : 'Save restaurant'}
+                <div className='toolbar'>
+                  <div className='helper'>
+                    Updated at {restaurant.updated_at}
+                  </div>
+                  <button
+                    className='button'
+                    type='submit'
+                    disabled={savingAction === 'restaurant'}
+                  >
+                    {savingAction === 'restaurant'
+                      ? 'Saving restaurant...'
+                      : 'Save restaurant'}
                   </button>
                 </div>
               </form>
             </section>
 
-            <section className="detail-card section">
-              <div className="section-head">
+            <section className='detail-card section'>
+              <div className='section-head'>
                 <div>
-                  <span className="kicker">Opening hours</span>
+                  <span className='kicker'>Opening hours</span>
                   <h2>Schedule</h2>
-                  <p>Each row updates the restaurant_opening_hours table.</p>
+                  <p>
+                    Each row updates the restaurant_opening_hours table. Fill
+                    open time and close time will default to 23:59 unless you
+                    change it. Monday seeds the same hours for the full week.
+                  </p>
                 </div>
               </div>
 
-              <div className="table-like">
+              <div className='table-like'>
                 {(bundle?.openingHours ?? []).map((hour) => (
-                  <form key={`${version}-${hour.id}`} className="card" onSubmit={(event) => void handleOpeningHourSave(event, hour.id)}>
-                    <div className="inline-grid">
-                      <div className="field">
+                  <form
+                    key={`${version}-${hour.id}`}
+                    className='card'
+                    onSubmit={(event) =>
+                      void handleOpeningHourSave(event, hour.id)
+                    }
+                  >
+                    <div className='inline-grid'>
+                      <div className='field'>
                         <label htmlFor={`day-${hour.id}`}>Day</label>
-                        <select id={`day-${hour.id}`} name="day_of_week" defaultValue={hour.day_of_week}>
+                        <select
+                          id={`day-${hour.id}`}
+                          name='day_of_week'
+                          defaultValue={hour.day_of_week}
+                        >
                           {[0, 1, 2, 3, 4, 5, 6].map((day) => (
-                            <option key={day} value={day}>
+                            <option
+                              key={day}
+                              value={day}
+                            >
                               {dayLabel(day)}
                             </option>
                           ))}
                         </select>
                       </div>
-                      <div className="field">
+                      <div className='field'>
                         <label htmlFor={`open-${hour.id}`}>Open time</label>
-                        <input id={`open-${hour.id}`} name="open_time" type="time" defaultValue={formValue(hour.open_time)} />
+                        <input
+                          id={`open-${hour.id}`}
+                          name='open_time'
+                          type='time'
+                          defaultValue={formValue(hour.open_time)}
+                          onChange={autofillClosingTime}
+                        />
                       </div>
-                      <div className="field">
+                      <div className='field'>
                         <label htmlFor={`close-${hour.id}`}>Close time</label>
-                        <input id={`close-${hour.id}`} name="close_time" type="time" defaultValue={formValue(hour.close_time)} />
+                        <input
+                          id={`close-${hour.id}`}
+                          name='close_time'
+                          type='time'
+                          defaultValue={formValue(hour.close_time)}
+                        />
                       </div>
                     </div>
 
-                    <div className="switch-row">
-                      <label className="check"><input name="is_closed" type="checkbox" defaultChecked={hour.is_closed} /> Closed</label>
+                    <div className='switch-row'>
+                      <label className='check'>
+                        <input
+                          name='is_closed'
+                          type='checkbox'
+                          defaultChecked={hour.is_closed}
+                        />{' '}
+                        Closed
+                      </label>
                     </div>
 
-                    <div className="toolbar">
-                      <div className="helper">Row created {hour.created_at}</div>
-                      <div className="search-row">
-                        <button className="button-ghost" type="button" onClick={() => void handleOpeningHourDelete(hour.id)}>
+                    <div className='toolbar'>
+                      <div className='helper'>
+                        Row created {hour.created_at}
+                      </div>
+                      <div className='search-row'>
+                        <button
+                          className='button-ghost'
+                          type='button'
+                          onClick={() => void handleOpeningHourDelete(hour.id)}
+                        >
                           Delete
                         </button>
-                        <button className="button" type="submit" disabled={savingAction === `opening-${hour.id}`}>
-                          {savingAction === `opening-${hour.id}` ? 'Saving...' : 'Save row'}
+                        <button
+                          className='button'
+                          type='submit'
+                          disabled={savingAction === `opening-${hour.id}`}
+                        >
+                          {savingAction === `opening-${hour.id}`
+                            ? 'Saving...'
+                            : 'Save row'}
                         </button>
                       </div>
                     </div>
                   </form>
                 ))}
 
-                <form className="card" onSubmit={handleOpeningHourAdd}>
-                  <div className="inline-grid">
-                    <div className="field">
-                      <label htmlFor="new-day">Day</label>
-                      <select id="new-day" name="day_of_week" defaultValue={1}>
+                <form
+                  className='card'
+                  onSubmit={handleOpeningHourAdd}
+                >
+                  <div className='inline-grid'>
+                    <div className='field'>
+                      <label htmlFor='new-day'>Day</label>
+                      <select
+                        id='new-day'
+                        name='day_of_week'
+                        defaultValue={1}
+                      >
                         {[0, 1, 2, 3, 4, 5, 6].map((day) => (
-                          <option key={day} value={day}>
+                          <option
+                            key={day}
+                            value={day}
+                          >
                             {dayLabel(day)}
                           </option>
                         ))}
                       </select>
                     </div>
-                    <div className="field">
-                      <label htmlFor="new-open">Open time</label>
-                      <input id="new-open" name="open_time" type="time" />
+                    <div className='field'>
+                      <label htmlFor='new-open'>Open time</label>
+                      <input
+                        id='new-open'
+                        name='open_time'
+                        type='time'
+                        onChange={autofillClosingTime}
+                      />
                     </div>
-                    <div className="field">
-                      <label htmlFor="new-close">Close time</label>
-                      <input id="new-close" name="close_time" type="time" />
+                    <div className='field'>
+                      <label htmlFor='new-close'>Close time</label>
+                      <input
+                        id='new-close'
+                        name='close_time'
+                        type='time'
+                      />
                     </div>
                   </div>
-                  <div className="switch-row">
-                    <label className="check"><input name="is_closed" type="checkbox" /> Closed</label>
+                  <div className='switch-row'>
+                    <label className='check'>
+                      <input
+                        name='is_closed'
+                        type='checkbox'
+                      />{' '}
+                      Closed
+                    </label>
                   </div>
-                  <div className="toolbar">
-                    <div className="helper">Add a new row to restaurant_opening_hours.</div>
-                    <button className="button" type="submit" disabled={savingAction === 'opening-new'}>
-                      {savingAction === 'opening-new' ? 'Adding...' : 'Add opening row'}
+                  <div className='toolbar'>
+                    <div className='helper'>
+                      Add a new row to restaurant_opening_hours.
+                    </div>
+                    <button
+                      className='button'
+                      type='submit'
+                      disabled={savingAction === 'opening-new'}
+                    >
+                      {savingAction === 'opening-new'
+                        ? 'Adding...'
+                        : 'Add opening row'}
                     </button>
                   </div>
                 </form>
               </div>
             </section>
 
-            <section className="detail-card section">
-              <div className="section-head">
+            <section className='detail-card section'>
+              <div className='section-head'>
                 <div>
-                  <span className="kicker">Media assets</span>
+                  <span className='kicker'>Media assets</span>
                   <h2>Images and menus</h2>
-                  <p>Upload local images to preview instantly. Keep only preview, enhance, and remove actions.</p>
+                  <p>
+                    Upload local images to preview instantly. Keep only preview,
+                    enhance, and remove actions.
+                  </p>
                 </div>
-                <div className="search-row">
-                  <span className="count-pill">{localMediaPreviews.length} local pending</span>
-                  <button className="button" type="button" onClick={() => void handleSaveLocalMediaChanges()} disabled={savingAction === 'media-save'}>
-                    {savingAction === 'media-save' ? 'Saving images...' : 'Save image changes'}
+                <div className='search-row'>
+                  <span className='count-pill'>
+                    {localMediaPreviews.length} local pending
+                  </span>
+                  <button
+                    className='button'
+                    type='button'
+                    onClick={() => void handleSaveLocalMediaChanges()}
+                    disabled={savingAction === 'media-save'}
+                  >
+                    {savingAction === 'media-save'
+                      ? 'Saving images...'
+                      : 'Save image changes'}
                   </button>
                 </div>
               </div>
 
-              <div className="table-like">
+              <div className='table-like'>
                 {[
                   { key: 'food' as const, label: 'Food Images' },
                   { key: 'ambience' as const, label: 'Ambience Images' },
-                  { key: 'menu' as const, label: 'Menu Images' }
+                  { key: 'menu' as const, label: 'Menu Images' },
                 ].map((group) => {
-                  const existingAssets = (bundle?.mediaAssets ?? []).filter((asset) => asset.asset_type === group.key);
-                  const localAssets = localMediaPreviews.filter((asset) => asset.assetType === group.key);
+                  const existingAssets = (bundle?.mediaAssets ?? []).filter(
+                    (asset) => asset.asset_type === group.key,
+                  );
+                  const localAssets = localMediaPreviews.filter(
+                    (asset) => asset.assetType === group.key,
+                  );
 
                   return (
-                    <section key={group.key} className="helper-box media-group">
+                    <section
+                      key={group.key}
+                      className='helper-box media-group'
+                    >
                       <h3>{group.label}</h3>
 
-                      <div className="media-preview-grid">
+                      <div className='media-preview-grid'>
                         {existingAssets.map((asset) => (
-                          <article key={asset.id} className="media-preview-card">
+                          <article
+                            key={asset.id}
+                            className='media-preview-card'
+                          >
                             <button
-                              className="media-remove"
-                              type="button"
-                              onClick={() => void handleMediaAssetDelete(asset.id)}
-                              aria-label="Remove image"
+                              className='media-remove'
+                              type='button'
+                              onClick={() =>
+                                void handleMediaAssetDelete(asset.id)
+                              }
+                              aria-label='Remove image'
                             >
                               ×
                             </button>
-                            <img src={mediaUrl(asset)} alt={`${group.label} preview`} className="media-preview-image" />
-                            <div className="search-row media-actions">
+                            <img
+                              src={mediaUrl(asset)}
+                              alt={`${group.label} preview`}
+                              className='media-preview-image'
+                            />
+                            <div className='search-row media-actions'>
                               <select
-                                className="asset-type-select"
+                                className='asset-type-select'
                                 value={asset.asset_type}
-                                onChange={(e) => void handleChangeAssetType(asset.id, e.target.value as AssetType)}
-                                aria-label="Change asset type"
+                                onChange={(e) =>
+                                  void handleChangeAssetType(
+                                    asset.id,
+                                    e.target.value as AssetType,
+                                  )
+                                }
+                                aria-label='Change asset type'
                               >
-                                <option value="food">Food</option>
-                                <option value="ambience">Ambience</option>
-                                <option value="menu">Menu</option>
+                                <option value='food'>Food</option>
+                                <option value='ambience'>Ambience</option>
+                                <option value='menu'>Menu</option>
                               </select>
 
                               <select
-                                className="asset-duplicate-select"
-                                defaultValue=""
+                                className='asset-duplicate-select'
+                                defaultValue=''
                                 onChange={(e) => {
                                   const v = e.target.value as AssetType;
                                   if (v) {
@@ -1212,76 +1858,100 @@ export default function RestaurantDetailsPage() {
                                     e.currentTarget.value = '';
                                   }
                                 }}
-                                aria-label="Duplicate asset to group"
+                                aria-label='Duplicate asset to group'
                               >
-                                <option value="">Duplicate as...</option>
-                                <option value="food">Food</option>
-                                <option value="ambience">Ambience</option>
-                                <option value="menu">Menu</option>
+                                <option value=''>Duplicate as...</option>
+                                <option value='food'>Food</option>
+                                <option value='ambience'>Ambience</option>
+                                <option value='menu'>Menu</option>
                               </select>
 
                               <button
-                                className="button-ghost"
-                                type="button"
-                                onClick={() => void handleSetCoverImage(mediaUrl(asset))}
+                                className='button-ghost'
+                                type='button'
+                                onClick={() =>
+                                  void handleSetCoverImage(mediaUrl(asset))
+                                }
                                 disabled={savingAction === 'cover-image'}
                               >
                                 {restaurant.cover_image === mediaUrl(asset)
                                   ? 'Cover image'
                                   : savingAction === 'cover-image'
-                                  ? 'Saving...'
-                                  : 'Set as cover'}
+                                    ? 'Saving...'
+                                    : 'Set as cover'}
                               </button>
                               <button
-                                className="button"
-                                type="button"
-                                onClick={() => void handleEnhanceImage(asset.id, mediaUrl(asset))}
-                                disabled={enhancementStatus[asset.id] === 'queuing' || enhancementStatus[asset.id] === 'enhancing'}
+                                className='button'
+                                type='button'
+                                onClick={() =>
+                                  void handleEnhanceImage(
+                                    asset.id,
+                                    mediaUrl(asset),
+                                  )
+                                }
+                                disabled={
+                                  enhancementStatus[asset.id] === 'queuing' ||
+                                  enhancementStatus[asset.id] === 'enhancing'
+                                }
                               >
                                 {enhancementStatus[asset.id] === 'queuing'
                                   ? 'Queuing...'
                                   : enhancementStatus[asset.id] === 'queued'
-                                  ? 'Queued'
-                                  : enhancementStatus[asset.id] === 'error'
-                                  ? 'Retry'
-                                  : 'Enhance'}
+                                    ? 'Queued'
+                                    : enhancementStatus[asset.id] === 'error'
+                                      ? 'Retry'
+                                      : 'Enhance'}
                               </button>
                             </div>
                           </article>
                         ))}
 
                         {localAssets.map((asset) => (
-                          <article key={asset.id} className="media-preview-card">
+                          <article
+                            key={asset.id}
+                            className='media-preview-card'
+                          >
                             <button
-                              className="media-remove"
-                              type="button"
+                              className='media-remove'
+                              type='button'
                               onClick={() => handleRemoveLocalPreview(asset.id)}
-                              aria-label="Remove local preview"
+                              aria-label='Remove local preview'
                             >
                               ×
                             </button>
-                            <img src={asset.previewUrl} alt={`${group.label} local preview`} className="media-preview-image" />
-                            <div className="search-row media-actions">
+                            <img
+                              src={asset.previewUrl}
+                              alt={`${group.label} local preview`}
+                              className='media-preview-image'
+                            />
+                            <div className='search-row media-actions'>
                               <button
-                                className="button"
-                                type="button"
-                                onClick={() => setNotice('Save image changes first, then use Enhance.')}
+                                className='button'
+                                type='button'
+                                onClick={() =>
+                                  setNotice(
+                                    'Save image changes first, then use Enhance.',
+                                  )
+                                }
                               >
                                 Enhance
                               </button>
                             </div>
-                            <div className="small">Local: {asset.fileName}</div>
+                            <div className='small'>Local: {asset.fileName}</div>
                           </article>
                         ))}
                       </div>
 
-                      <div className="field">
+                      <div className='field'>
                         <input
-                          type="file"
-                          accept="image/*"
+                          type='file'
+                          accept='image/*'
                           multiple
                           onChange={(event) => {
-                            handleLocalMediaFiles(group.key, event.target.files);
+                            handleLocalMediaFiles(
+                              group.key,
+                              event.target.files,
+                            );
                             event.currentTarget.value = '';
                           }}
                         />
@@ -1292,89 +1962,203 @@ export default function RestaurantDetailsPage() {
               </div>
             </section>
 
-            <section className="detail-card section">
-              <div className="section-head">
+            <section className='detail-card section'>
+              <div className='section-head'>
                 <div>
-                  <span className="kicker">Reviews</span>
+                  <span className='kicker'>Reviews</span>
                   <h2>Customer feedback</h2>
-                  <p>Edit approval, reply text, and rating fields in restaurant_reviews.</p>
+                  <p>
+                    Edit approval, reply text, and rating fields in
+                    restaurant_reviews.
+                  </p>
                 </div>
               </div>
 
-              <div className="table-like">
+              <div className='table-like'>
                 {(bundle?.reviews ?? []).map((review) => (
-                  <form key={`${version}-${review.id}`} className="card" onSubmit={(event) => void handleReviewSave(event, review.id)}>
-                    <div className="form-grid">
-                      <div className="field">
-                        <label htmlFor={`review-rating-${review.id}`}>Rating</label>
-                        <input id={`review-rating-${review.id}`} name="rating" type="number" step="any" defaultValue={formValue(review.rating)} required />
+                  <form
+                    key={`${version}-${review.id}`}
+                    className='card'
+                    onSubmit={(event) =>
+                      void handleReviewSave(event, review.id)
+                    }
+                  >
+                    <div className='form-grid'>
+                      <div className='field'>
+                        <label htmlFor={`review-rating-${review.id}`}>
+                          Rating
+                        </label>
+                        <input
+                          id={`review-rating-${review.id}`}
+                          name='rating'
+                          type='number'
+                          step='any'
+                          defaultValue={formValue(review.rating)}
+                          required
+                        />
                       </div>
-                      <div className="field">
-                        <label htmlFor={`review-food-${review.id}`}>Food rating</label>
-                        <input id={`review-food-${review.id}`} name="food_rating" type="number" step="any" defaultValue={formValue(review.food_rating)} />
+                      <div className='field'>
+                        <label htmlFor={`review-food-${review.id}`}>
+                          Food rating
+                        </label>
+                        <input
+                          id={`review-food-${review.id}`}
+                          name='food_rating'
+                          type='number'
+                          step='any'
+                          defaultValue={formValue(review.food_rating)}
+                        />
                       </div>
-                      <div className="field">
-                        <label htmlFor={`review-service-${review.id}`}>Service rating</label>
-                        <input id={`review-service-${review.id}`} name="service_rating" type="number" step="any" defaultValue={formValue(review.service_rating)} />
+                      <div className='field'>
+                        <label htmlFor={`review-service-${review.id}`}>
+                          Service rating
+                        </label>
+                        <input
+                          id={`review-service-${review.id}`}
+                          name='service_rating'
+                          type='number'
+                          step='any'
+                          defaultValue={formValue(review.service_rating)}
+                        />
                       </div>
-                      <div className="field">
-                        <label htmlFor={`review-ambience-${review.id}`}>Ambience rating</label>
-                        <input id={`review-ambience-${review.id}`} name="ambience_rating" type="number" step="any" defaultValue={formValue(review.ambience_rating)} />
+                      <div className='field'>
+                        <label htmlFor={`review-ambience-${review.id}`}>
+                          Ambience rating
+                        </label>
+                        <input
+                          id={`review-ambience-${review.id}`}
+                          name='ambience_rating'
+                          type='number'
+                          step='any'
+                          defaultValue={formValue(review.ambience_rating)}
+                        />
                       </div>
-                      <div className="field">
-                        <label htmlFor={`review-drinks-${review.id}`}>Drinks rating</label>
-                        <input id={`review-drinks-${review.id}`} name="drinks_rating" type="number" step="any" defaultValue={formValue(review.drinks_rating)} />
+                      <div className='field'>
+                        <label htmlFor={`review-drinks-${review.id}`}>
+                          Drinks rating
+                        </label>
+                        <input
+                          id={`review-drinks-${review.id}`}
+                          name='drinks_rating'
+                          type='number'
+                          step='any'
+                          defaultValue={formValue(review.drinks_rating)}
+                        />
                       </div>
-                      <div className="field">
-                        <label htmlFor={`review-crowd-${review.id}`}>Crowd rating</label>
-                        <input id={`review-crowd-${review.id}`} name="crowd_rating" type="number" step="any" defaultValue={formValue(review.crowd_rating)} />
+                      <div className='field'>
+                        <label htmlFor={`review-crowd-${review.id}`}>
+                          Crowd rating
+                        </label>
+                        <input
+                          id={`review-crowd-${review.id}`}
+                          name='crowd_rating'
+                          type='number'
+                          step='any'
+                          defaultValue={formValue(review.crowd_rating)}
+                        />
                       </div>
-                      <div className="field">
-                        <label htmlFor={`review-source-${review.id}`}>Source</label>
-                        <input id={`review-source-${review.id}`} name="source" type="text" defaultValue={formValue(review.source)} />
+                      <div className='field'>
+                        <label htmlFor={`review-source-${review.id}`}>
+                          Source
+                        </label>
+                        <input
+                          id={`review-source-${review.id}`}
+                          name='source'
+                          type='text'
+                          defaultValue={formValue(review.source)}
+                        />
                       </div>
-                      <div className="field">
-                        <label htmlFor={`review-ext-${review.id}`}>External review id</label>
-                        <input id={`review-ext-${review.id}`} name="external_review_id" type="text" defaultValue={formValue(review.external_review_id)} />
+                      <div className='field'>
+                        <label htmlFor={`review-ext-${review.id}`}>
+                          External review id
+                        </label>
+                        <input
+                          id={`review-ext-${review.id}`}
+                          name='external_review_id'
+                          type='text'
+                          defaultValue={formValue(review.external_review_id)}
+                        />
                       </div>
                     </div>
 
-                    <div className="field">
-                      <label htmlFor={`review-text-${review.id}`}>Review text</label>
-                      <textarea id={`review-text-${review.id}`} name="review_text" defaultValue={formValue(review.review_text)} />
+                    <div className='field'>
+                      <label htmlFor={`review-text-${review.id}`}>
+                        Review text
+                      </label>
+                      <textarea
+                        id={`review-text-${review.id}`}
+                        name='review_text'
+                        defaultValue={formValue(review.review_text)}
+                      />
                     </div>
 
-                    <div className="field">
-                      <label htmlFor={`review-reply-${review.id}`}>Owner reply</label>
-                      <textarea id={`review-reply-${review.id}`} name="owner_reply_text" defaultValue={formValue(review.owner_reply_text)} />
+                    <div className='field'>
+                      <label htmlFor={`review-reply-${review.id}`}>
+                        Owner reply
+                      </label>
+                      <textarea
+                        id={`review-reply-${review.id}`}
+                        name='owner_reply_text'
+                        defaultValue={formValue(review.owner_reply_text)}
+                      />
                     </div>
 
-                    <div className="field">
-                      <label htmlFor={`review-tags-${review.id}`}>Liked tags</label>
-                      <textarea id={`review-tags-${review.id}`} name="liked_tags" defaultValue={textFromArray(review.liked_tags)} />
+                    <div className='field'>
+                      <label htmlFor={`review-tags-${review.id}`}>
+                        Liked tags
+                      </label>
+                      <textarea
+                        id={`review-tags-${review.id}`}
+                        name='liked_tags'
+                        defaultValue={textFromArray(review.liked_tags)}
+                      />
                     </div>
 
-                    <div className="field">
-                      <label htmlFor={`review-photos-${review.id}`}>Photo URLs</label>
-                      <textarea id={`review-photos-${review.id}`} name="photo_urls" defaultValue={textFromArray(review.photo_urls)} />
+                    <div className='field'>
+                      <label htmlFor={`review-photos-${review.id}`}>
+                        Photo URLs
+                      </label>
+                      <textarea
+                        id={`review-photos-${review.id}`}
+                        name='photo_urls'
+                        defaultValue={textFromArray(review.photo_urls)}
+                      />
                     </div>
 
-                    <div className="switch-row">
-                      <label className="check"><input name="is_approved" type="checkbox" defaultChecked={review.is_approved} /> Approved</label>
+                    <div className='switch-row'>
+                      <label className='check'>
+                        <input
+                          name='is_approved'
+                          type='checkbox'
+                          defaultChecked={review.is_approved}
+                        />{' '}
+                        Approved
+                      </label>
                     </div>
 
-                    <div className="toolbar">
-                      <div className="helper">
-                        By {review.username_snapshot || 'unknown user'} · created {review.created_at}
+                    <div className='toolbar'>
+                      <div className='helper'>
+                        By {review.username_snapshot || 'unknown user'} ·
+                        created {review.created_at}
                       </div>
-                      <button className="button" type="submit" disabled={savingAction === `review-${review.id}`}>
-                        {savingAction === `review-${review.id}` ? 'Saving...' : 'Save review'}
+                      <button
+                        className='button'
+                        type='submit'
+                        disabled={savingAction === `review-${review.id}`}
+                      >
+                        {savingAction === `review-${review.id}`
+                          ? 'Saving...'
+                          : 'Save review'}
                       </button>
                     </div>
                   </form>
                 ))}
 
-                {bundle?.reviews.length === 0 ? <div className="helper-box">No reviews found for this restaurant.</div> : null}
+                {bundle?.reviews.length === 0 ? (
+                  <div className='helper-box'>
+                    No reviews found for this restaurant.
+                  </div>
+                ) : null}
               </div>
             </section>
           </div>
