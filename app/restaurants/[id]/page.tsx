@@ -678,6 +678,7 @@ export default function RestaurantDetailsPage() {
 
     try {
       await deleteMediaAsset(id);
+      await republishIfApproved();
       await loadBundle();
       setNotice('Media asset deleted.');
     } catch (deleteError) {
@@ -756,6 +757,7 @@ export default function RestaurantDetailsPage() {
     setNotice(null);
     try {
       await saveMediaAsset(assetId, { asset_type: newType });
+      await republishIfApproved();
       await loadBundle();
       setNotice('Asset type updated.');
     } catch (e) {
@@ -781,6 +783,7 @@ export default function RestaurantDetailsPage() {
         sort_order: asset.sort_order,
       });
 
+      await republishIfApproved();
       await loadBundle();
       setNotice('Asset duplicated to target group.');
     } catch (e) {
@@ -988,6 +991,7 @@ export default function RestaurantDetailsPage() {
       }
 
       setLocalMediaPreviews([]);
+      await republishIfApproved();
       await loadBundle();
       setNotice(
         `Image changes saved.${resolvedBucket ? ` Uploaded to bucket: ${resolvedBucket}.` : ''}`,
