@@ -15,6 +15,7 @@ import {
   saveStoreOpeningHour,
   saveStoreTags,
   StoreBundle,
+  StoreTag,
   syncStoreMirror,
   updateStore,
 } from '@/lib/store-dashboard';
@@ -79,8 +80,15 @@ function tagLinesFromText(value: string) {
     .filter(Boolean);
 }
 
-function tagTextFromBundle(tags: { tag_value: string }[] | undefined) {
-  return (tags ?? []).map((tag) => tag.tag_value).join('\n');
+// The storefront only ever reads tag_type='tag' for stores
+// (store_tags.eq('tag_type', 'tag') in passprive), so that's the only kind
+// of store tag exposed here.
+function tagTextFromBundle(tags: StoreTag[] | undefined) {
+  return (tags ?? [])
+    .filter((tag) => tag.tag_type === 'tag')
+    .sort((left, right) => left.sort_order - right.sort_order)
+    .map((tag) => tag.tag_value)
+    .join('\n');
 }
 
 type LocalMediaPreview = {
@@ -399,6 +407,23 @@ export default function StoreDetailsPage() {
     }
   }
 
+  async function handleSetLogo(logoUrl: string) {
+    setSavingAction('logo-image');
+    setNotice(null);
+
+    try {
+      await updateStore(storeId, { logo_url: logoUrl });
+      await syncStoreMirror(storeId, { logo_url: logoUrl });
+      await republishIfApproved();
+      await loadBundle();
+      setNotice('Logo updated.');
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Failed to update logo');
+    } finally {
+      setSavingAction(null);
+    }
+  }
+
   async function handleOpeningHourSave(event: FormEvent<HTMLFormElement>, id: string) {
     event.preventDefault();
     setSavingAction(`opening-${id}`);
@@ -483,49 +508,11 @@ export default function StoreDetailsPage() {
 
     try {
       await deleteStoreMediaAsset(id);
+      await republishIfApproved();
       await loadBundle();
       setNotice('Media asset deleted.');
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : 'Failed to delete media asset');
-    } finally {
-      setSavingAction(null);
-    }
-  }
-
-  async function handleChangeAssetType(assetId: string, newType: AssetType) {
-    setSavingAction('media-update');
-    setNotice(null);
-    try {
-      await saveStoreMediaAsset(assetId, { asset_type: newType });
-      await loadBundle();
-      setNotice('Asset type updated.');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update asset type');
-    } finally {
-      setSavingAction(null);
-    }
-  }
-
-  async function handleDuplicateAsset(asset: any, targetType: AssetType) {
-    setSavingAction('media-duplicate');
-    setNotice(null);
-    try {
-      await createStoreMediaAsset(storeId!, {
-        asset_type: targetType,
-        file_url: asset.file_url,
-        file_path: asset.file_path,
-        storage_public_url: asset.storage_public_url,
-        storage_bucket: asset.storage_bucket,
-        storage_path: asset.storage_path,
-        mime_type: asset.mime_type,
-        is_active: asset.is_active,
-        sort_order: asset.sort_order,
-      });
-
-      await loadBundle();
-      setNotice('Asset duplicated to target group.');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to duplicate asset');
     } finally {
       setSavingAction(null);
     }
@@ -703,6 +690,18 @@ export default function StoreDetailsPage() {
 
       setLocalMediaPreviews([]);
       await loadBundle();
+
+      try {
+        await republishIfApproved();
+      } catch (syncError) {
+        setNotice(
+          syncError instanceof Error
+            ? `Images saved locally, but mirror sync failed: ${syncError.message}`
+            : 'Images saved locally, but mirror sync failed.',
+        );
+        return;
+      }
+
       setNotice(`Image changes saved.${resolvedBucket ? ` Uploaded to bucket: ${resolvedBucket}.` : ''}`);
     } catch (saveError) {
       setError(
@@ -926,6 +925,24 @@ export default function StoreDetailsPage() {
                 </div>
 
                 <div className='field'>
+                  <label>Logo</label>
+                  <div className='helper'>
+                    Select from provided images in the Media Assets section using the "Set as logo" button. This is
+                    what the storefront actually reads — uploading into the Logo group alone isn't enough.
+                  </div>
+                  {store.logo_url ? (
+                    <img
+                      src={store.logo_url}
+                      alt='Current logo'
+                      className='media-preview-image'
+                      style={{ maxWidth: 160, marginTop: 10 }}
+                    />
+                  ) : (
+                    <div className='helper-box'>No logo selected yet.</div>
+                  )}
+                </div>
+
+                <div className='field'>
                   <label htmlFor='place_types'>Place types</label>
                   <textarea id='place_types' name='place_types' defaultValue={textFromArray(store.place_types)} />
                 </div>
@@ -1055,8 +1072,11 @@ export default function StoreDetailsPage() {
               <div className='section-head'>
                 <div>
                   <span className='kicker'>Media assets</span>
-                  <h2>Logo, cover, and gallery images</h2>
-                  <p>Upload local images to preview instantly. Keep only preview, enhance, and remove actions.</p>
+                  <h2>Images</h2>
+                  <p>
+                    Upload local images to preview instantly, then use "Set as cover" / "Set as logo" on any image
+                    below to feature it — it stays in this list either way.
+                  </p>
                 </div>
                 <div className='search-row'>
                   <span className='count-pill'>{localMediaPreviews.length} local pending</span>
@@ -1067,97 +1087,63 @@ export default function StoreDetailsPage() {
               </div>
 
               <div className='table-like'>
-                {[
-                  { key: 'logo' as const, label: 'Logo' },
-                  { key: 'cover' as const, label: 'Cover Images' },
-                  { key: 'gallery' as const, label: 'Gallery Images' },
-                ].map((group) => {
-                  const existingAssets = (bundle?.mediaAssets ?? []).filter((asset) => asset.asset_type === group.key);
-                  const localAssets = localMediaPreviews.filter((asset) => asset.assetType === group.key);
+                <section className='helper-box media-group'>
+                  <div className='media-preview-grid'>
+                    {(bundle?.mediaAssets ?? []).map((asset) => (
+                      <article key={asset.id} className='media-preview-card'>
+                        <button
+                          className='media-remove'
+                          type='button'
+                          onClick={() => void handleMediaAssetDelete(asset.id)}
+                          aria-label='Remove image'
+                        >
+                          ×
+                        </button>
+                        <img src={mediaUrl(asset)} alt='Store image preview' className='media-preview-image' />
+                        <div className='search-row media-actions'>
+                          <button
+                            className='button-ghost'
+                            type='button'
+                            onClick={() => void handleSetCoverImage(mediaUrl(asset))}
+                            disabled={savingAction === 'cover-image'}
+                          >
+                            {store.cover_image === mediaUrl(asset) ? 'Cover image' : savingAction === 'cover-image' ? 'Saving...' : 'Set as cover'}
+                          </button>
+                          <button
+                            className='button-ghost'
+                            type='button'
+                            onClick={() => void handleSetLogo(mediaUrl(asset))}
+                            disabled={savingAction === 'logo-image'}
+                          >
+                            {store.logo_url === mediaUrl(asset) ? 'Logo' : savingAction === 'logo-image' ? 'Saving...' : 'Set as logo'}
+                          </button>
+                        </div>
+                      </article>
+                    ))}
 
-                  return (
-                    <section key={group.key} className='helper-box media-group'>
-                      <h3>{group.label}</h3>
+                    {localMediaPreviews.map((asset) => (
+                      <article key={asset.id} className='media-preview-card'>
+                        <button className='media-remove' type='button' onClick={() => handleRemoveLocalPreview(asset.id)} aria-label='Remove local preview'>
+                          ×
+                        </button>
+                        <img src={asset.previewUrl} alt='Local image preview' className='media-preview-image' />
+                        <div className='small'>Local: {asset.fileName}</div>
+                      </article>
+                    ))}
+                  </div>
 
-                      <div className='media-preview-grid'>
-                        {existingAssets.map((asset) => (
-                          <article key={asset.id} className='media-preview-card'>
-                            <button
-                              className='media-remove'
-                              type='button'
-                              onClick={() => void handleMediaAssetDelete(asset.id)}
-                              aria-label='Remove image'
-                            >
-                              ×
-                            </button>
-                            <img src={mediaUrl(asset)} alt={`${group.label} preview`} className='media-preview-image' />
-                            <div className='search-row media-actions'>
-                              <select
-                                className='asset-type-select'
-                                value={asset.asset_type}
-                                onChange={(e) => void handleChangeAssetType(asset.id, e.target.value as AssetType)}
-                                aria-label='Change asset type'
-                              >
-                                <option value='logo'>Logo</option>
-                                <option value='cover'>Cover</option>
-                                <option value='gallery'>Gallery</option>
-                              </select>
-
-                              <select
-                                className='asset-duplicate-select'
-                                defaultValue=''
-                                onChange={(e) => {
-                                  const v = e.target.value as AssetType;
-                                  if (v) {
-                                    void handleDuplicateAsset(asset, v);
-                                    e.currentTarget.value = '';
-                                  }
-                                }}
-                                aria-label='Duplicate asset to group'
-                              >
-                                <option value=''>Duplicate as...</option>
-                                <option value='logo'>Logo</option>
-                                <option value='cover'>Cover</option>
-                                <option value='gallery'>Gallery</option>
-                              </select>
-
-                              <button
-                                className='button-ghost'
-                                type='button'
-                                onClick={() => void handleSetCoverImage(mediaUrl(asset))}
-                                disabled={savingAction === 'cover-image'}
-                              >
-                                {store.cover_image === mediaUrl(asset) ? 'Cover image' : savingAction === 'cover-image' ? 'Saving...' : 'Set as cover'}
-                              </button>
-                            </div>
-                          </article>
-                        ))}
-
-                        {localAssets.map((asset) => (
-                          <article key={asset.id} className='media-preview-card'>
-                            <button className='media-remove' type='button' onClick={() => handleRemoveLocalPreview(asset.id)} aria-label='Remove local preview'>
-                              ×
-                            </button>
-                            <img src={asset.previewUrl} alt={`${group.label} local preview`} className='media-preview-image' />
-                            <div className='small'>Local: {asset.fileName}</div>
-                          </article>
-                        ))}
-                      </div>
-
-                      <div className='field'>
-                        <input
-                          type='file'
-                          accept='image/*'
-                          multiple
-                          onChange={(event) => {
-                            handleLocalMediaFiles(group.key, event.target.files);
-                            event.currentTarget.value = '';
-                          }}
-                        />
-                      </div>
-                    </section>
-                  );
-                })}
+                  <div className='field'>
+                    <input
+                      type='file'
+                      accept='image/*'
+                      multiple
+                      onChange={(event) => {
+                        handleLocalMediaFiles('gallery', event.target.files);
+                        event.currentTarget.value = '';
+                      }}
+                    />
+                  </div>
+                </section>
               </div>
             </section>
           </div>

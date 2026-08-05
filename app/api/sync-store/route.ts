@@ -55,6 +55,7 @@ async function buildFullStoreRow(storeId: string) {
     lng: store.longitude,
     google_place_id: store.google_place_id,
     cover_image: store.cover_image,
+    logo_url: store.logo_url,
     owner_user_id: null,
     created_by: null,
     is_active: store.is_active,
@@ -88,7 +89,7 @@ async function buildFullStoreRow(storeId: string) {
 }
 
 function buildMirrorPayload(changes: Record<string, unknown>) {
-  const directKeys = new Set(['name', 'slug', 'description', 'category', 'subcategory', 'phone', 'city', 'country', 'full_address', 'google_place_id', 'cover_image', 'is_active']);
+  const directKeys = new Set(['name', 'slug', 'description', 'category', 'subcategory', 'phone', 'city', 'country', 'full_address', 'google_place_id', 'cover_image', 'logo_url', 'is_active']);
 
   const payload: Record<string, unknown> = {};
 
