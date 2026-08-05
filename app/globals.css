@@ -66,6 +66,49 @@ main {
   gap: 20px;
 }
 
+.nav-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: var(--shadow);
+  width: fit-content;
+}
+
+.nav-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.nav-tab.active {
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: #fff7ed;
+  box-shadow: 0 12px 22px rgba(180, 83, 9, 0.18);
+}
+
+.nav-tab-count {
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.nav-tab:not(.active) .nav-tab-count {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
 .hero {
   position: relative;
   overflow: hidden;
