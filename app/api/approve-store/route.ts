@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
 import { fetchStoreBundle } from '@/lib/store-dashboard';
@@ -95,6 +96,7 @@ async function buildSecondDatabaseStoreRow(store: Awaited<ReturnType<typeof fetc
     lng: store.longitude,
     google_place_id: store.google_place_id,
     cover_image: store.cover_image,
+    logo_url: store.logo_url,
     owner_user_id: null,
     created_by: null,
     is_active: store.is_active,
@@ -190,15 +192,43 @@ async function syncSecondDatabase(storeId: string) {
     result.openingHours = 0;
   }
 
-  const mediaRows = source.mediaAssets.map((row) => ({
-    id: row.id,
-    store_id: source.store.id,
-    asset_type: row.asset_type,
-    file_url: row.storage_public_url || row.file_url,
-    file_path: row.file_path,
-    sort_order: row.sort_order,
-    is_active: row.is_active
-  }));
+  // The passprive customer app reads stores.logo_url / stores.cover_image
+  // directly and only ever reads asset_type='gallery' from store_media_assets.
+  // The PassPrive-admin merchant panel does the opposite for logo/cover: it
+  // prefers a store_media_assets row typed 'logo'/'cover_image' and falls
+  // back to the first gallery photo (for *both* fields) when neither exists,
+  // and that fallback wins over the real stores.logo_url/cover_image columns.
+  // So both need a matching store_media_assets row, synced from whichever
+  // image is actually selected (not just whatever's sitting in the primary
+  // Logo/Cover groups, which could be more than one candidate image).
+  const galleryRows = source.mediaAssets
+    .filter((row) => row.asset_type === 'gallery')
+    .map((row) => ({
+      id: row.id,
+      store_id: source.store.id,
+      asset_type: row.asset_type,
+      file_url: row.storage_public_url || row.file_url,
+      file_path: row.file_path,
+      sort_order: row.sort_order,
+      is_active: row.is_active
+    }));
+
+  const selectedImageRows = [
+    source.store.logo_url ? { asset_type: 'logo', file_url: source.store.logo_url } : null,
+    source.store.cover_image ? { asset_type: 'cover_image', file_url: source.store.cover_image } : null
+  ]
+    .filter((row): row is { asset_type: string; file_url: string } => Boolean(row))
+    .map((row, index) => ({
+      id: randomUUID(),
+      store_id: source.store.id,
+      asset_type: row.asset_type,
+      file_url: row.file_url,
+      file_path: null,
+      sort_order: index,
+      is_active: true
+    }));
+
+  const mediaRows = [...galleryRows, ...selectedImageRows];
 
   try {
     const clearMediaAssets = await secondDb.from('store_media_assets').delete().eq('store_id', source.store.id);
@@ -228,6 +258,9 @@ async function syncSecondDatabase(storeId: string) {
     result.mediaAssets = 0;
   }
 
+  // The storefront only ever reads tag_type='tag' for stores, so that's the
+  // only kind synced here even though production's CHECK constraint allows
+  // facility/highlight/worth_visit/mood too.
   const tagRows = source.tags
     .map((row, index) => ({
       store_id: source.store.id,

@@ -10,6 +10,7 @@ export type Store = {
   full_address: string | null;
   slug: string | null;
   cover_image: string | null;
+  logo_url: string | null;
   latitude: number | string | null;
   longitude: number | string | null;
   description: string | null;
@@ -87,6 +88,7 @@ export type StoreUpdateInput = Partial<
     | 'full_address'
     | 'slug'
     | 'cover_image'
+    | 'logo_url'
     | 'latitude'
     | 'longitude'
     | 'description'
@@ -147,7 +149,7 @@ function normalizeOpeningHourRow(row: StoreOpeningHourInput) {
 }
 
 const storeSelect = `
-  id, name, phone, area, city, street_address, full_address, slug, cover_image, latitude, longitude,
+  id, name, phone, area, city, street_address, full_address, slug, cover_image, logo_url, latitude, longitude,
   description, is_active, owner_user_id, created_at, updated_at, google_place_id, source, source_payload,
   last_synced_at, rating, user_ratings_total, place_types, country, category, subcategory, isapproved
 `;
@@ -320,6 +322,9 @@ export async function deleteStoreMediaAsset(id: string) {
   }
 }
 
+// The storefront only ever reads tag_type='tag' for stores
+// (store_tags.eq('tag_type', 'tag') in passprive), so that's the only kind
+// of store tag written here.
 export async function saveStoreTags(storeId: string, tagValues: string[]) {
   function isPermissionError(error: unknown) {
     const err = error as { status?: number | string; code?: string; message?: string } | null;
