@@ -13,6 +13,7 @@ import {
   deleteStoreOpeningHour,
   fetchStoreBundle,
   saveStoreOpeningHour,
+  saveStoreTags,
   StoreBundle,
   syncStoreMirror,
   updateStore,
@@ -69,6 +70,17 @@ function categoryTagsFromValue(value: string | null | undefined) {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function tagLinesFromText(value: string) {
+  return value
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function tagTextFromBundle(tags: { tag_value: string }[] | undefined) {
+  return (tags ?? []).map((tag) => tag.tag_value).join('\n');
 }
 
 type LocalMediaPreview = {
@@ -359,9 +371,10 @@ export default function StoreDetailsPage() {
 
       await updateStore(storeId, payload);
       await syncStoreMirror(storeId, payload);
+      const tagSaveResult = await saveStoreTags(storeId, tagLinesFromText(formValue(formData.get('tags'))));
       await republishIfApproved();
       await loadBundle();
-      setNotice('Store details saved.');
+      setNotice(tagSaveResult.warning ?? 'Store details saved.');
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Failed to save store');
     } finally {
@@ -874,6 +887,20 @@ export default function StoreDetailsPage() {
                       );
                     })}
                   </div>
+                </div>
+
+                <div className='field'>
+                  <label htmlFor='tags'>Tags</label>
+                  <div className='helper' style={{ marginBottom: 8 }}>
+                    Shown as bullet keywords under "About the brand" on the storefront (e.g. fashion, premium,
+                    clothing). One per line or comma-separated.
+                  </div>
+                  <textarea
+                    id='tags'
+                    name='tags'
+                    defaultValue={tagTextFromBundle(bundle?.tags)}
+                    placeholder={'fashion\npremium\nclothing'}
+                  />
                 </div>
 
                 <div className='field'>

@@ -228,6 +228,43 @@ async function syncSecondDatabase(storeId: string) {
     result.mediaAssets = 0;
   }
 
+  const tagRows = source.tags
+    .map((row, index) => ({
+      store_id: source.store.id,
+      tag_type: 'tag',
+      tag_value: row.tag_value.trim(),
+      sort_order: Number.isFinite(row.sort_order) ? row.sort_order : index
+    }))
+    .filter((row) => row.tag_value.length > 0);
+
+  try {
+    const clearTags = await secondDb.from('store_tags').delete().eq('store_id', source.store.id);
+    if (clearTags.error) {
+      result.clearTagsError = clearTags.error.message || String(clearTags.error);
+    } else {
+      result.clearedTags = true;
+    }
+  } catch (err) {
+    result.clearTagsError = err instanceof Error ? err.message : String(err);
+  }
+
+  if (tagRows.length) {
+    try {
+      const insertTags = await secondDb.from('store_tags').insert(tagRows);
+      if (insertTags.error) {
+        result.insertTagsError = insertTags.error.message || String(insertTags.error);
+        result.tags = 0;
+      } else {
+        result.tags = tagRows.length;
+      }
+    } catch (err) {
+      result.insertTagsError = err instanceof Error ? err.message : String(err);
+      result.tags = 0;
+    }
+  } else {
+    result.tags = 0;
+  }
+
   const criticalSyncErrors = [result.storeUpsertError, result.openingHoursDeleteError, result.openingHoursInsertError].filter(Boolean);
 
   if (criticalSyncErrors.length) {

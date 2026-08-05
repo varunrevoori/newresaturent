@@ -59,10 +59,21 @@ export type StoreMediaAsset = {
   storage_public_url: string | null;
 };
 
+export type StoreTag = {
+  id: string;
+  store_id: string;
+  tag_type: string;
+  tag_value: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
 export type StoreBundle = {
   store: Store;
   openingHours: StoreOpeningHour[];
   mediaAssets: StoreMediaAsset[];
+  tags: StoreTag[];
 };
 
 export type StoreUpdateInput = Partial<
@@ -174,21 +185,32 @@ export async function fetchPendingStoreCount() {
   return count ?? 0;
 }
 
+function isMissingTableError(error: unknown) {
+  const code = (error as { code?: string } | null)?.code;
+  const message = ((error as { message?: string } | null)?.message ?? '').toLowerCase();
+  return code === 'PGRST205' || message.includes('could not find the table');
+}
+
 export async function fetchStoreBundle(id: string): Promise<StoreBundle> {
-  const [storeResult, hoursResult, mediaResult] = await Promise.all([
+  const [storeResult, hoursResult, mediaResult, tagsResult] = await Promise.all([
     supabase.from('stores').select(storeSelect).eq('id', id).single(),
     supabase.from('store_opening_hours').select('*').eq('store_id', id).order('day_of_week', { ascending: true }),
-    supabase.from('store_media_assets').select('*').eq('store_id', id).order('sort_order', { ascending: true })
+    supabase.from('store_media_assets').select('*').eq('store_id', id).order('sort_order', { ascending: true }),
+    supabase.from('store_tags').select('*').eq('store_id', id).order('sort_order', { ascending: true })
   ]);
 
   if (storeResult.error) throw storeResult.error;
   if (hoursResult.error) throw hoursResult.error;
   if (mediaResult.error) throw mediaResult.error;
+  // store_tags is a newer table (migration 0002); tolerate it not existing yet
+  // instead of breaking the whole bundle load.
+  if (tagsResult.error && !isMissingTableError(tagsResult.error)) throw tagsResult.error;
 
   return {
     store: storeResult.data as Store,
     openingHours: (hoursResult.data ?? []) as StoreOpeningHour[],
-    mediaAssets: (mediaResult.data ?? []) as StoreMediaAsset[]
+    mediaAssets: (mediaResult.data ?? []) as StoreMediaAsset[],
+    tags: (tagsResult.data ?? []) as StoreTag[]
   };
 }
 
@@ -296,4 +318,59 @@ export async function deleteStoreMediaAsset(id: string) {
   if (error) {
     throw error;
   }
+}
+
+export async function saveStoreTags(storeId: string, tagValues: string[]) {
+  function isPermissionError(error: unknown) {
+    const err = error as { status?: number | string; code?: string; message?: string } | null;
+    const status = typeof err?.status === 'string' ? Number(err.status) : err?.status;
+    const message = (err?.message ?? '').toLowerCase();
+
+    return (
+      status === 401 ||
+      status === 403 ||
+      err?.code === '401' ||
+      err?.code === '403' ||
+      err?.code === '42501' ||
+      message.includes('unauthorized') ||
+      message.includes('row-level security') ||
+      message.includes('permission denied')
+    );
+  }
+
+  const deleteResult = await supabase.from('store_tags').delete().eq('store_id', storeId);
+  if (deleteResult.error) {
+    if (isMissingTableError(deleteResult.error)) {
+      return { saved: false as const, warning: 'Store saved, but tags could not be updated: run migration 0002_add_store_tags.sql first.' };
+    }
+    if (isPermissionError(deleteResult.error)) {
+      return { saved: false as const, warning: 'Store saved, but tags could not be updated due to table permissions.' };
+    }
+
+    throw deleteResult.error;
+  }
+
+  const normalizedTags = tagValues
+    .map((value, index) => ({
+      store_id: storeId,
+      tag_type: 'tag',
+      tag_value: value.trim(),
+      sort_order: index
+    }))
+    .filter((tag) => tag.tag_value.length > 0);
+
+  if (!normalizedTags.length) {
+    return { saved: true as const };
+  }
+
+  const insertResult = await supabase.from('store_tags').insert(normalizedTags);
+  if (insertResult.error) {
+    if (isPermissionError(insertResult.error)) {
+      return { saved: false as const, warning: 'Store saved, but tags could not be updated due to table permissions.' };
+    }
+
+    throw insertResult.error;
+  }
+
+  return { saved: true as const };
 }
