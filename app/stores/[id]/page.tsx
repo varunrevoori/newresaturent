@@ -21,6 +21,56 @@ import { supabase } from '@/lib/supabase';
 
 type AssetType = 'logo' | 'cover' | 'gallery';
 
+// Mirrors the production `store_mood_categories` table (the canonical
+// top-level categories used across the storefront). `stores.category` stores
+// one or more of these as a comma-separated string.
+const storeCategoryOptions = [
+  'All Stores',
+  'Apparel',
+  'Footwear',
+  'Accessories',
+  'Jewellery',
+  'Beauty',
+  'Home Furniture',
+  'Salon & Wellness',
+];
+
+// `stores.subcategory` has no fixed taxonomy in production, just free text.
+// These are the values already in use there, offered as autocomplete
+// suggestions so new entries stay consistent instead of drifting.
+const storeSubcategorySuggestions = [
+  'Activewear',
+  'Bags & Watches',
+  'Casual & Street Fashion',
+  'Clothing',
+  'Cosmetics',
+  'Crystal Jewellery',
+  'Denim',
+  'Fashion Jewellery',
+  'Footwear',
+  'Footwear & Bags',
+  'Furniture & Electronics',
+  'Furniture & Home Decor',
+  'Hair Salon',
+  'Home Decor',
+  'Interior Furniture & Decor',
+  "Men's Fashion",
+  "Men's Wear",
+  'Makeup & Skincare',
+  'Shoes & Apparel',
+  'Spa',
+  'Streetwear',
+  'Sunglasses & Eyewear',
+  "Women's Fashion",
+];
+
+function categoryTagsFromValue(value: string | null | undefined) {
+  return (value ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 type LocalMediaPreview = {
   id: string;
   assetType: AssetType;
@@ -131,7 +181,7 @@ function buildStoreUpdate(formData: FormData) {
     user_ratings_total: nullableNumber(formData.get('user_ratings_total')),
     place_types: arrayFromText(formValue(formData.get('place_types'))),
     country: nullableString(formData.get('country')),
-    category: nullableString(formData.get('category')),
+    category: formData.getAll('category_tag').map(String).join(', ') || null,
     subcategory: nullableString(formData.get('subcategory')),
     isapproved: booleanValue(formData, 'isapproved'),
   };
@@ -739,12 +789,20 @@ export default function StoreDetailsPage() {
                     <input id='phone' name='phone' type='text' defaultValue={formValue(store.phone)} />
                   </div>
                   <div className='field'>
-                    <label htmlFor='category'>Category</label>
-                    <input id='category' name='category' type='text' defaultValue={formValue(store.category)} />
-                  </div>
-                  <div className='field'>
                     <label htmlFor='subcategory'>Subcategory</label>
-                    <input id='subcategory' name='subcategory' type='text' defaultValue={formValue(store.subcategory)} />
+                    <input
+                      id='subcategory'
+                      name='subcategory'
+                      type='text'
+                      list='subcategory-suggestions'
+                      defaultValue={formValue(store.subcategory)}
+                      placeholder='e.g. Hair Salon, Denim, Fashion Jewellery'
+                    />
+                    <datalist id='subcategory-suggestions'>
+                      {storeSubcategorySuggestions.map((option) => (
+                        <option key={option} value={option} />
+                      ))}
+                    </datalist>
                   </div>
                   <div className='field'>
                     <label htmlFor='country'>Country</label>
@@ -795,6 +853,26 @@ export default function StoreDetailsPage() {
                       step='1'
                       defaultValue={formValue(store.user_ratings_total)}
                     />
+                  </div>
+                </div>
+
+                <div className='field'>
+                  <label htmlFor='category_tag'>Category</label>
+                  <div className='helper' style={{ marginBottom: 8 }}>
+                    Matches the production store_mood_categories taxonomy. Pick every category this store belongs to.
+                  </div>
+                  <div className='switch-row' style={{ alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+                    {storeCategoryOptions.map((option) => {
+                      const checked = categoryTagsFromValue(store.category).some(
+                        (tag) => tag.toLowerCase() === option.toLowerCase(),
+                      );
+
+                      return (
+                        <label key={option} className='check' style={{ minWidth: 160 }}>
+                          <input name='category_tag' type='checkbox' value={option} defaultChecked={checked} /> {option}
+                        </label>
+                      );
+                    })}
                   </div>
                 </div>
 
