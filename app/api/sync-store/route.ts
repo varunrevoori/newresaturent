@@ -47,7 +47,9 @@ async function buildFullStoreRow(storeId: string) {
     address_line1: store.street_address,
     city: store.city,
     region: store.area,
-    country: store.country,
+    // `stores.country` is NOT NULL in the second DB; scraped rows almost
+    // always have it, but fall back rather than fail the insert if not.
+    country: store.country ?? 'Mauritius',
     full_address: store.full_address,
     lat: store.latitude,
     lng: store.longitude,
