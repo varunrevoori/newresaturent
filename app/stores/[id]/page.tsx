@@ -69,6 +69,63 @@ const storeSubcategoryOptions = [
   "Women's Fashion",
 ];
 
+const CUSTOM_SUBCATEGORY_VALUE = '__custom__';
+
+function SubcategoryField({ defaultValue }: { defaultValue: string | null }) {
+  const isCustom = Boolean(defaultValue) && !storeSubcategoryOptions.includes(defaultValue as string);
+  const [mode, setMode] = useState<'select' | 'custom'>(isCustom ? 'custom' : 'select');
+  const [selectValue, setSelectValue] = useState(isCustom ? '' : (defaultValue ?? ''));
+
+  if (mode === 'custom') {
+    return (
+      <div className='field'>
+        <label htmlFor='subcategory-custom'>Subcategory</label>
+        <input
+          id='subcategory-custom'
+          type='text'
+          name='subcategory'
+          defaultValue={isCustom ? defaultValue ?? '' : ''}
+          placeholder='Type a new subcategory'
+        />
+        <button
+          type='button'
+          className='button-ghost'
+          style={{ marginTop: 8, width: 'fit-content' }}
+          onClick={() => setMode('select')}
+        >
+          Choose from list instead
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className='field'>
+      <label htmlFor='subcategory-select'>Subcategory</label>
+      <select
+        id='subcategory-select'
+        name='subcategory'
+        value={selectValue}
+        onChange={(event) => {
+          if (event.target.value === CUSTOM_SUBCATEGORY_VALUE) {
+            setMode('custom');
+          } else {
+            setSelectValue(event.target.value);
+          }
+        }}
+      >
+        <option value=''>No subcategory</option>
+        {storeSubcategoryOptions.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+        <option value={CUSTOM_SUBCATEGORY_VALUE}>Other (type manually)</option>
+      </select>
+    </div>
+  );
+}
+
 function categoryTagsFromValue(value: string | null | undefined) {
   return (value ?? '')
     .split(',')
@@ -803,20 +860,7 @@ export default function StoreDetailsPage() {
                     <label htmlFor='phone'>Phone</label>
                     <input id='phone' name='phone' type='text' defaultValue={formValue(store.phone)} />
                   </div>
-                  <div className='field'>
-                    <label htmlFor='subcategory'>Subcategory</label>
-                    <select id='subcategory' name='subcategory' defaultValue={formValue(store.subcategory)}>
-                      <option value=''>No subcategory</option>
-                      {(store.subcategory && !storeSubcategoryOptions.includes(store.subcategory)
-                        ? [store.subcategory, ...storeSubcategoryOptions]
-                        : storeSubcategoryOptions
-                      ).map((option) => (
-                        <option key={option} value={option}>
-                          {option}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <SubcategoryField defaultValue={store.subcategory} />
                   <div className='field'>
                     <label htmlFor='country'>Country</label>
                     <input id='country' name='country' type='text' defaultValue={formValue(store.country)} />
