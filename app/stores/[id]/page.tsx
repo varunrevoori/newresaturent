@@ -37,10 +37,11 @@ const storeCategoryOptions = [
   'Salon & Wellness',
 ];
 
-// `stores.subcategory` has no fixed taxonomy in production, just free text.
-// These are the values already in use there, offered as autocomplete
-// suggestions so new entries stay consistent instead of drifting.
-const storeSubcategorySuggestions = [
+// `stores.subcategory` has no fixed taxonomy in production, just a single
+// free-text value (PassPrive-admin's own field for it is a plain text input
+// too). This is every distinct value actually in use there right now, kept
+// as a closed list so entries stay consistent instead of drifting.
+const storeSubcategoryOptions = [
   'Activewear',
   'Bags & Watches',
   'Casual & Street Fashion',
@@ -59,10 +60,12 @@ const storeSubcategorySuggestions = [
   "Men's Fashion",
   "Men's Wear",
   'Makeup & Skincare',
+  'Religious Clothing',
   'Shoes & Apparel',
   'Spa',
   'Streetwear',
   'Sunglasses & Eyewear',
+  "Women's Clothing",
   "Women's Fashion",
 ];
 
@@ -802,19 +805,17 @@ export default function StoreDetailsPage() {
                   </div>
                   <div className='field'>
                     <label htmlFor='subcategory'>Subcategory</label>
-                    <input
-                      id='subcategory'
-                      name='subcategory'
-                      type='text'
-                      list='subcategory-suggestions'
-                      defaultValue={formValue(store.subcategory)}
-                      placeholder='e.g. Hair Salon, Denim, Fashion Jewellery'
-                    />
-                    <datalist id='subcategory-suggestions'>
-                      {storeSubcategorySuggestions.map((option) => (
-                        <option key={option} value={option} />
+                    <select id='subcategory' name='subcategory' defaultValue={formValue(store.subcategory)}>
+                      <option value=''>No subcategory</option>
+                      {(store.subcategory && !storeSubcategoryOptions.includes(store.subcategory)
+                        ? [store.subcategory, ...storeSubcategoryOptions]
+                        : storeSubcategoryOptions
+                      ).map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
                       ))}
-                    </datalist>
+                    </select>
                   </div>
                   <div className='field'>
                     <label htmlFor='country'>Country</label>
